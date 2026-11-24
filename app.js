@@ -1015,9 +1015,13 @@
     return M.normalizeExercise({ kind: 'powerset', title, text, nfa: strip(A) });
   }
 
-  function enterExercise(ex) {
+  const CURRENT_EX_ID_KEY = 'automata-lab:current-exercise-id';
+
+  /** exId: where the work is saved (by default one place per exercise; live sessions use one per session). */
+  function enterExercise(ex, exId) {
     ui.exercise = ex;
-    ui.exId = hashString(JSON.stringify(ex));
+    ui.exId = exId || hashString(JSON.stringify(ex));
+    try { localStorage.setItem(CURRENT_EX_ID_KEY, ui.exId); } catch (e) { /* ignore */ }
     ui.exResult = null;
     let work = null;
     try { const s = localStorage.getItem(EX_KEY + ui.exId); if (s) work = M.normalize(JSON.parse(s)); } catch (e) { work = null; }
@@ -1062,16 +1066,55 @@
     clearInterval(liveTimer);
     liveTimer = setInterval(() => {
       if (!ui.live) return;
+      if (ui.live.meta && ui.live.meta.createdAt && Live.isExpired(ui.live.meta, Live.now())) { liveExpire(); return; }
       const t = timerText();
-      $$('.live-timer').forEach(el => { el.textContent = t; el.classList.toggle('over', ui.live.meta && ui.live.meta.endsAt && Date.now() >= ui.live.meta.endsAt); });
+      $$('.live-timer').forEach(el => { el.textContent = t; el.classList.toggle('over', ui.live.meta && ui.live.meta.endsAt && Live.now() >= ui.live.meta.endsAt); });
     }, 500);
   }
 
   function timerText() {
     const m = ui.live && ui.live.meta;
     if (!m || !m.endsAt) return '';
-    const s = Math.max(0, Math.round((m.endsAt - Date.now()) / 1000));
+    const s = Math.max(0, Math.round((m.endsAt - Live.now()) / 1000));
     return s === 0 ? 'Time is up' : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  // codes of the sessions started in this browser: leftovers are deleted the next time the editor opens
+  const LIVE_MINE_KEY = 'automata-lab:live-mine';
+  function liveMine(change) {
+    let list = [];
+    try { list = JSON.parse(localStorage.getItem(LIVE_MINE_KEY)) || []; } catch (e) { list = []; }
+    if (change) { list = change(list); try { localStorage.setItem(LIVE_MINE_KEY, JSON.stringify(list)); } catch (e) { /* ignore */ } }
+    return list;
+  }
+
+  function withTimeout(promise, ms) {
+    return Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error('no answer from the server')), ms))]);
+  }
+
+  /** Any open tab of an expired session removes it. */
+  function liveExpire() {
+    const code = ui.live.code;
+    if (ui.live.role === 'host') { try { localStorage.removeItem(LIVE_HOST_KEY); } catch (e) { /* ignore */ } }
+    liveStop();
+    Live.get().end(code).then(() => liveMine(l => l.filter(c => c !== code))).catch(() => { /* removed at the next chance */ });
+    toast('The live session expired after 3 hours.');
+    renderAll();
+  }
+
+  /** Editor, at start: delete this browser's expired sessions (tab closed without "End session"). */
+  async function liveSweep() {
+    const mine = liveMine();
+    if (!EDITOR || !mine.length) return;
+    const b = Live.get();
+    try { await b.init(); } catch (e) { return; }
+    for (const code of mine) {
+      try {
+        const m = await b.getMeta(code);
+        if (m && m.owner === b.uid()) { if (!Live.isExpired(m, b.now())) continue; await b.end(code); }
+        liveMine(l => l.filter(c => c !== code));
+      } catch (e) { /* try again next time */ }
+    }
   }
 
   function appAddress() { return location.host + location.pathname.replace(/index\.html$/, ''); }
@@ -1084,8 +1127,9 @@
       await b.init();
       const code = await Live.newCode(b);
       const clean = Object.assign({}, ex); delete clean.code;
-      await b.create(code, { open: true, title: ex.title || KIND_LABEL[ex.kind], createdAt: Date.now(), endsAt: 0 }, clean);
-      liveHost(code, { open: true, endsAt: 0, title: ex.title || KIND_LABEL[ex.kind] });
+      const meta = await b.create(code, { open: true, title: ex.title || KIND_LABEL[ex.kind], endsAt: 0 }, clean);
+      liveMine(l => l.concat(code));
+      liveHost(code, meta);
     } catch (e) { toast('Could not start the live session: ' + e.message, true); }
   }
 
@@ -1096,8 +1140,17 @@
     liveStop();
     try { localStorage.setItem(LIVE_HOST_KEY, code); } catch (e) { /* ignore */ }
     ui.live = { role: 'host', code, meta, players: {}, unsubs: [], showNames: false };
-    ui.live.unsubs.push(b.watchMeta(code, m => { if (ui.live && ui.live.code === code && m) { ui.live.meta = m; liveRefresh(); } }));
-    ui.live.unsubs.push(b.watchPlayers(code, p => { if (ui.live && ui.live.code === code) { ui.live.players = p || {}; liveRefresh(); } }));
+    const lost = () => toast('Connection to the live session lost — reload the page to reconnect.', true);
+    ui.live.unsubs.push(b.watchMeta(code, m => {
+      if (!ui.live || ui.live.code !== code) return;
+      if (m) { ui.live.meta = m; liveRefresh(); return; }
+      liveStop();
+      try { localStorage.removeItem(LIVE_HOST_KEY); } catch (e) { /* ignore */ }
+      liveMine(l => l.filter(c => c !== code));
+      toast('The live session has ended.');
+      renderAll();
+    }, lost));
+    ui.live.unsubs.push(b.watchPlayers(code, p => { if (ui.live && ui.live.code === code) { ui.live.players = p || {}; liveRefresh(); } }, lost));
     liveTick();
     ui.tab = 'exercise';
     renderAll();
@@ -1114,7 +1167,7 @@
       await b.init();
       if (host) {
         const meta = await b.getMeta(host);
-        if (meta && meta.open && meta.owner === b.uid()) liveHost(host, meta);
+        if (meta && meta.open && meta.owner === b.uid() && !Live.isExpired(meta, b.now())) liveHost(host, meta);
         else localStorage.removeItem(LIVE_HOST_KEY);
       } else if (join) {
         await liveJoin(join);
@@ -1126,9 +1179,13 @@
     if (!ui.live || ui.live.role !== 'host') return;
     if (!window.confirm('End the live session? The results are deleted and nobody can join any more.')) return;
     const code = ui.live.code;
-    liveStop();
+    // say "ended" only once the data is really gone; otherwise stay here so it can be tried again
+    try { await withTimeout(Live.get().end(code), 8000); }
+    catch (e) { toast('Could not confirm that the data was deleted (' + e.message + '). Check the connection and press End session again.', true); return; }
+    if (ui.live && ui.live.code === code) liveStop();
     try { localStorage.removeItem(LIVE_HOST_KEY); } catch (e) { /* ignore */ }
-    try { await Live.get().end(code); } catch (e) { /* already gone */ }
+    liveMine(l => l.filter(c => c !== code));
+    toast('Session ended — all its data was deleted.');
     renderAll();
   }
 
@@ -1136,8 +1193,8 @@
     if (!ui.live || ui.live.role !== 'host') return;
     const m = ui.live.meta;
     let endsAt = 0;
-    if (minutes === 'add') endsAt = Math.max(Date.now(), m.endsAt || Date.now()) + 60000;
-    else if (minutes > 0) endsAt = Date.now() + minutes * 60000;
+    if (minutes === 'add') endsAt = Math.max(Live.now(), m.endsAt || 0) + 60000;
+    else if (minutes > 0) endsAt = Live.now() + minutes * 60000;
     ui.live.meta = Object.assign({}, m, { endsAt });
     renderPanel(); renderProjector();
     try { await Live.get().setMeta(ui.live.code, { endsAt }); } catch (e) { toast(e.message, true); }
@@ -1153,30 +1210,32 @@
     if (!name) { ui.liveError = 'Choose a name (a nickname is fine).'; renderPanel(); return; }
     ui.liveError = null; ui.liveBusy = true; renderPanel();
     const b = Live.get();
+    let gone = false;                       // the session really is not open (as opposed to a network problem)
     try {
       await b.init();
       const meta = await b.getMeta(code);
-      if (!meta || !meta.open) throw new Error(`There is no open live session with the code ${code}.`);
+      gone = !meta || !meta.open || Live.isExpired(meta, b.now());
+      if (gone) throw new Error(`There is no open live session with the code ${code}.`);
       const ex = M.normalizeExercise(await b.getExercise(code));
       const before = await b.getPlayer(code);            // joining again (e.g. after a reload): keep the progress
       if (before) await b.setPlayer(code, { name });
       else await b.setPlayer(code, { name, joinedAt: Date.now(), attempts: 0, solved: false });
       try { localStorage.setItem('automata-lab:live-name', name); } catch (e) { /* ignore */ }
-      try { sessionStorage.setItem(LIVE_JOIN_KEY, JSON.stringify({ code, name })); } catch (e) { /* ignore */ }
       ui.liveBusy = false;
       liveStop();
+      try { sessionStorage.setItem(LIVE_JOIN_KEY, JSON.stringify({ code, name })); } catch (e) { /* ignore */ }
       ui.live = { role: 'player', code, name, meta, attempts: (before && before.attempts) || 0, solved: !!(before && before.solved), unsubs: [] };
       ui.live.unsubs.push(b.watchMeta(code, m => {
         if (!ui.live || ui.live.code !== code) return;
         if (!m || !m.open) { liveStop(); toast('The live session has ended. You can keep working on the exercise.'); renderAll(); return; }
         ui.live.meta = m; renderPanel();
-      }));
+      }, () => toast('Connection to the live session lost — reload the page to reconnect.', true)));
       liveTick();
-      enterExercise(ex);
+      enterExercise(ex, `live-${code}-${meta.createdAt}`);   // every session starts from an empty canvas
     } catch (e) {
       ui.liveBusy = false;
-      try { sessionStorage.removeItem(LIVE_JOIN_KEY); } catch (err) { /* ignore */ }
-      if (rejoin) { toast('The live session is no longer open.'); return; }
+      if (gone) { try { sessionStorage.removeItem(LIVE_JOIN_KEY); } catch (err) { /* ignore */ } }
+      if (rejoin) { toast(gone ? 'The live session is no longer open.' : 'Could not reconnect to the live session — reload the page to try again.', !gone); renderPanel(); return; }
       ui.liveError = e.message;
       renderPanel();
     }
@@ -1189,7 +1248,7 @@
     L.attempts++;
     const patch = { attempts: L.attempts, lastCheck: Date.now() };
     if (result.ok && !L.solved) { L.solved = true; patch.solved = true; patch.solvedAt = Date.now(); }
-    Live.get().setPlayer(L.code, patch).catch(() => { /* session closed meanwhile */ });
+    Live.get().setPlayer(L.code, patch).catch(() => { if (ui.live === L) toast('Your result could not be sent to the live session.', true); });
   }
 
   function liveStats() {
@@ -1231,7 +1290,7 @@
       h += `<div class="list">` + ps.map(p => `<div class="list-row static"><div class="lr-main"><b>${esc(p.name)}</b><span>${p.attempts || 0} check${p.attempts === 1 ? '' : 's'}</span></div>
         ${p.solved ? '<span class="pill ok">solved</span>' : '<span class="pill">working</span>'}</div>`).join('') + `</div>`;
     }
-    h += `</div><div class="muted small">Only the result of each check is sent — never the automaton. Ending the session deletes everything.</div>`;
+    h += `</div><div class="muted small">Only the result of each check is sent — never the automaton. Ending the session deletes everything; a forgotten session expires after 3 hours.</div>`;
     return h;
   }
 
@@ -1512,7 +1571,7 @@
 
   function start() {
     if (EDITOR) { $('#editor-pill').hidden = false; document.title = 'Automata Lab — editor'; }
-    let initial = null, fromLink = false, exercise = null;
+    let initial = null, fromLink = false, exercise = null, exerciseId = null;
     if (location.hash.startsWith('#m=')) {
       try { initial = decode(location.hash.slice(3)); fromLink = true; } catch (e) { toast('The link does not contain a valid automaton.', true); }
       history.replaceState(null, '', location.pathname + location.search);
@@ -1539,9 +1598,12 @@
       try { exercise = M.normalizeExercise(decode(location.hash.slice(3))); } catch (e) { toast('The link does not contain a valid exercise.', true); }
       history.replaceState(null, '', location.pathname + location.search);
     } else {
-      try { const s = localStorage.getItem(CURRENT_EX_KEY); if (s) exercise = M.normalizeExercise(JSON.parse(s)); } catch (e) { exercise = null; }
+      try {
+        const s = localStorage.getItem(CURRENT_EX_KEY);
+        if (s) { exercise = M.normalizeExercise(JSON.parse(s)); exerciseId = localStorage.getItem(CURRENT_EX_ID_KEY); }
+      } catch (e) { exercise = null; }
     }
-    if (exercise) { enterExercise(exercise); Guide.init(); liveResume(); return; }
+    if (exercise) { enterExercise(exercise, exerciseId); Guide.init(); liveResume(); liveSweep(); return; }
     if (!initial) {
       try { const s = localStorage.getItem(STORAGE_KEY); if (s) initial = JSON.parse(s); } catch (e) { /* ignore */ }
     }
@@ -1550,6 +1612,7 @@
     if (fromLink) toast('Automaton loaded from the link.');
     Guide.init();
     liveResume();
+    liveSweep();
   }
   start();
 })();

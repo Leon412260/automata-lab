@@ -17,6 +17,10 @@
 (function (root) {
   'use strict';
   const SDK = 'https://www.gstatic.com/firebasejs/10.12.2/';
+  const TTL = 3 * 60 * 60 * 1000;   // a forgotten session expires after 3 hours
+
+  /** Sessions created before expiry existed fall back to createdAt. */
+  function isExpired(meta, now) { return now > (meta.expiresAt || (meta.createdAt || 0) + TTL); }
 
   function loadScript(src) {
     return new Promise((resolve, reject) => {
@@ -30,9 +34,10 @@
 
   // ---------- Firebase ----------
   function firebaseBackend(config) {
-    let db = null, uid = null;
+    let db = null, uid = null, offset = 0;
     return {
       kind: 'firebase',
+      now: () => Date.now() + offset,      // server time: the countdown agrees on every computer
       async init() {
         if (uid) return uid;
         if (!root.firebase || !root.firebase.database) {
@@ -45,6 +50,7 @@
         const cred = await fb.auth().signInAnonymously();
         uid = cred.user.uid;
         db = fb.database();
+        db.ref('.info/serverTimeOffset').on('value', s => { offset = s.val() || 0; });
         return uid;
       },
       uid: () => uid,
@@ -52,21 +58,34 @@
       async getExercise(code) { const v = (await db.ref(`sessions/${code}/exercise`).get()).val(); return v ? JSON.parse(v) : null; },
       async create(code, meta, exercise) {
         // two child writes (meta first): the security rules check each part separately
-        await db.ref(`sessions/${code}/meta`).set(Object.assign({}, meta, { owner: uid }));
-        await db.ref(`sessions/${code}/exercise`).set(JSON.stringify(exercise));
+        const now = this.now();
+        const full = Object.assign({}, meta, { owner: uid, createdAt: now, expiresAt: now + TTL });
+        await db.ref(`sessions/${code}/meta`).set(full);
+        try { await db.ref(`sessions/${code}/exercise`).set(JSON.stringify(exercise)); }
+        catch (e) { await this.end(code).catch(() => {}); throw e; }   // no half-created session
+        return full;
       },
       async setMeta(code, patch) { await db.ref(`sessions/${code}/meta`).update(patch); },
       async end(code) { await db.ref(`sessions/${code}`).remove(); },
       async setPlayer(code, patch) { await db.ref(`sessions/${code}/players/${uid}`).update(patch); },
       async getPlayer(code) { return (await db.ref(`sessions/${code}/players/${uid}`).get()).val(); },
-      watchMeta(code, cb) {
+      /** cb(null) only when the server confirms that the session is gone; read errors go to onError. */
+      watchMeta(code, cb, onError) {
         const ref = db.ref(`sessions/${code}/meta`);
-        const h = ref.on('value', s => cb(s.val()), () => cb(null));
-        return () => ref.off('value', h);
+        let stopped = false;
+        const fail = e => { if (!stopped && onError) onError(e); };
+        const h = ref.on('value', async s => {
+          if (s.val() !== null) { cb(s.val()); return; }
+          // a refused local write also looks like null for a moment: ask again before believing it
+          await new Promise(r => setTimeout(r, 1200));
+          if (stopped) return;
+          try { const again = (await ref.get()).val(); if (!stopped) cb(again); } catch (e) { fail(e); }
+        }, fail);
+        return () => { stopped = true; ref.off('value', h); };
       },
-      watchPlayers(code, cb) {
+      watchPlayers(code, cb, onError) {
         const ref = db.ref(`sessions/${code}/players`);
-        const h = ref.on('value', s => cb(s.val() || {}), () => cb({}));
+        const h = ref.on('value', s => cb(s.val() || {}), e => { if (onError) onError(e); });
         return () => ref.off('value', h);
       },
     };
@@ -92,6 +111,7 @@
     }
     return {
       kind: 'local',
+      now: () => Date.now(),
       async init() {
         if (uid) return uid;
         try { uid = sessionStorage.getItem('automata-lab:live-uid'); } catch (e) { uid = null; }
@@ -101,7 +121,11 @@
       uid: () => uid,
       async getMeta(code) { const s = read(code); return s ? s.meta : null; },
       async getExercise(code) { const s = read(code); return s ? JSON.parse(s.exercise) : null; },
-      async create(code, meta, exercise) { write(code, { meta: Object.assign({}, meta, { owner: uid }), exercise: JSON.stringify(exercise), players: {} }); },
+      async create(code, meta, exercise) {
+        const full = Object.assign({}, meta, { owner: uid, createdAt: Date.now(), expiresAt: Date.now() + TTL });
+        write(code, { meta: full, exercise: JSON.stringify(exercise), players: {} });
+        return full;
+      },
       async setMeta(code, patch) { const s = read(code); if (s) { Object.assign(s.meta, patch); write(code, s); } },
       async end(code) { write(code, null); },
       async setPlayer(code, patch) {
@@ -130,10 +154,12 @@
   async function newCode(b) {
     for (let i = 0; i < 30; i++) {
       const c = String(1000 + Math.floor(Math.random() * 9000));
-      if (!(await b.getMeta(c))) return c;
+      const m = await b.getMeta(c);
+      if (!m) return c;
+      if (isExpired(m, b.now())) { try { await b.end(c); return c; } catch (e) { /* not removable: try another code */ } }
     }
     throw new Error('Could not find a free session code — try again.');
   }
 
-  root.Live = { get, newCode, isTestMode: () => get().kind === 'local' };
+  root.Live = { get, newCode, isExpired, now: () => get().now(), isTestMode: () => get().kind === 'local' };
 })(typeof self !== 'undefined' ? self : this);

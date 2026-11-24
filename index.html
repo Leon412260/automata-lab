@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=2">
 <script>
   // day/night: the saved choice, otherwise the system setting (set before the page is drawn, so it never flashes)
   try {
@@ -89,12 +89,13 @@
 <div id="projector" class="projector" hidden></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+<!-- raise every ?v= number at each release, so browsers never mix old and new files -->
 <!-- all files sit next to index.html (no subfolders), so uploading to GitHub is just "select all files" -->
-<script src="core.js"></script>
-<script src="graph.js"></script>
-<script src="guide.js"></script>
-<script src="live-config.js"></script>
-<script src="live.js"></script>
-<script src="app.js"></script>
+<script src="core.js?v=2"></script>
+<script src="graph.js?v=2"></script>
+<script src="guide.js?v=2"></script>
+<script src="live-config.js?v=2"></script>
+<script src="live.js?v=2"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>
