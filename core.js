@@ -291,38 +291,43 @@
     return seen;
   }
 
-  /** Checks against the formal definition. Each issue: { level: 'error'|'warning'|'info', text, fix? }. */
+  /**
+   * Checks against the formal definition. Each issue: { level: 'error'|'info', text, rich, fix? }.
+   * rich = the same text with every state name between \u0001 and \u0002, so the app can show it as q with a subscript.
+   */
   function validate(A) {
     const issues = [];
+    const push = issue => { issue.rich = issue.text; issue.text = issue.text.replace(/[\u0001\u0002]/g, ''); issues.push(issue); };
+    const nm = q => '\u0001' + q + '\u0002';
+    const LIMIT = 4;
+    const listed = pairs => pairs.slice(0, LIMIT).map(([q, a]) => `δ(${nm(q)}, ${a})`).join(', ')
+      + (pairs.length > LIMIT ? ` and ${pairs.length - LIMIT} more` : '');
     const kind = A.type === 'FA' ? 'finite automaton' : 'nondeterministic finite automaton';
     if (A.states.length === 0) {
-      issues.push({ level: 'info', text: 'Q is empty — double-click the canvas to add a state.' });
+      push({ level: 'info', text: 'Q is empty — double-click the canvas to add a state.' });
       return issues;
     }
-    if (A.alphabet.length === 0) issues.push({ level: 'error', text: 'Σ is empty — an alphabet must be a non-empty finite set.' });
-    if (A.initial === null) issues.push({ level: 'error', text: 'No initial state q0 has been chosen.' });
+    if (A.alphabet.length === 0) push({ level: 'error', text: 'Σ is empty — an alphabet must be a non-empty finite set.' });
+    if (A.initial === null) push({ level: 'error', text: 'No initial state has been chosen.' });
     if (A.type === 'FA') {
       const nd = nondeterministicTransitions(A);
-      if (nd.length) issues.push({
+      if (nd.length) push({
         level: 'error',
-        text: `Not a ${kind}: ${nd.map(([q, a]) => `δ(${q}, ${a})`).join(', ')} ${nd.length === 1 ? 'has' : 'have'} more than one target state. Switch to NFA or remove arrows.`,
+        text: `Not a ${kind}: ${listed(nd)} ${nd.length === 1 ? 'has' : 'have'} more than one target state. Switch to NFA or remove arrows.`,
       });
       const und = undefinedTransitions(A);
-      if (und.length) issues.push({
+      if (und.length) push({
         level: 'error',
-        text: `δ must be total (δ: Q × Σ → Q), but ${und.map(([q, a]) => `δ(${q}, ${a})`).join(', ')} ${und.length === 1 ? 'is' : 'are'} undefined.`,
+        text: `δ must be total (δ: Q × Σ → Q), but ${listed(und)} ${und.length === 1 ? 'is' : 'are'} undefined.`,
         fix: 'trap',
       });
     }
     if (A.initial !== null) {
       const reach = reachableStates(A);
       const unreach = A.states.filter(q => !reach.has(q));
-      if (unreach.length) issues.push({
-        level: 'info',
-        text: `Not reachable from q0: ${unreach.join(', ')}` + (A.type === 'FA' ? ` (so Kl[${unreach[0]}] = ∅${unreach.length > 1 ? ', etc.' : ''}).` : '.'),
-      });
+      if (unreach.length) push({ level: 'info', text: `Not reachable from ${nm(A.initial)}: ${unreach.map(nm).join(', ')}.` });
     }
-    if (A.accepting.length === 0) issues.push({ level: 'info', text: 'F = ∅, so L(M) = ∅.' });
+    if (A.accepting.length === 0) push({ level: 'info', text: 'F = ∅, so L(M) = ∅.' });
     return issues;
   }
 
@@ -576,7 +581,7 @@
     if (!answer.states.length) problems.push('Your automaton has no states yet.');
     if (req === 'FA' && answer.type !== 'FA') problems.push('This exercise asks for a finite automaton (FA), not an NFA.');
     if (req === 'NFA' && answer.type !== 'NFA') problems.push('This exercise asks for a nondeterministic finite automaton (NFA).');
-    for (const i of validate(answer)) if (i.level === 'error') problems.push(i.text);
+    for (const i of validate(answer)) if (i.level === 'error') problems.push(i.rich);
     if (ex.kind === 'construct' && ex.maxStates && answer.states.length > ex.maxStates) {
       problems.push(`At most ${ex.maxStates} states are allowed — your automaton has ${answer.states.length}.`);
     }

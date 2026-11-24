@@ -13,3 +13,9 @@ window.AUTOMATA_LAB_FIREBASE = {
   messagingSenderId: "511125219499",
   appId: "1:511125219499:web:e5b1f2521352d0b0ac6fee"
 };
+
+/*
+ * Address of the published site: shown on the projected view and used in copied links
+ * when the app is opened on your own computer (as a file or from localhost).
+ */
+window.AUTOMATA_LAB_SITE = 'https://leon412260.github.io/automata-lab/';

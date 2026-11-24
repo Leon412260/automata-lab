@@ -210,7 +210,9 @@
         const C2 = { x: P.x + 78 * Math.cos(a2 + 0.35), y: P.y + 78 * Math.sin(a2 + 0.35) };
         const apex = { x: (S.x + 3 * C1.x + 3 * C2.x + E.x) / 8, y: (S.y + 3 * C1.y + 3 * C2.y + E.y) / 8 };
         const u = { x: Math.cos(th), y: Math.sin(th) };
-        const lp = add(P, mul(u, R + 52 + Math.abs(u.x) * 6));
+        // the label sits just outside the loop (further out sideways, where its width counts)
+        const half = 4 * (e.symbols.length ? e.symbols.join(', ').length : 1);
+        const lp = add(apex, mul(u, 13 + Math.abs(u.x) * Math.max(0, half - 4)));
         return { d: `M${S.x},${S.y} C${C1.x},${C1.y} ${C2.x},${C2.y} ${E.x},${E.y}`, lp, apex, loop: true };
       }
       const reverse = has.has(e.to + '\u0000' + e.from);
@@ -243,7 +245,55 @@
         side = n.y <= 0 ? n : mul(n, -1);                     // above a straight arrow
         if (Math.abs(n.y) < 0.2) side = n.x >= 0 ? n : mul(n, -1);
       }
-      return { d: `M${S.x},${S.y} Q${C.x},${C.y} ${E.x},${E.y}`, lp: add(apex, mul(side, 13)), apex, n, mid };
+      return { d: `M${S.x},${S.y} Q${C.x},${C.y} ${E.x},${E.y}`, lp: add(apex, mul(side, 13)), apex, side, curve: [S, C, E] };
+    }
+
+    /** A point of an arrow (quadratic curve), t = 0 … 1, and the direction across it. */
+    function onCurve([S, C, E], t) {
+      const u = 1 - t;
+      const d = { x: u * (C.x - S.x) + t * (E.x - C.x), y: u * (C.y - S.y) + t * (E.y - C.y) };
+      return { p: { x: u * u * S.x + 2 * u * t * C.x + t * t * E.x, y: u * u * S.y + 2 * u * t * C.y + t * t * E.y }, n: unit({ x: -d.y, y: d.x }) };
+    }
+
+    /** Moves the labels of the arrows so that they do not lie on other labels, arrows or states. */
+    function placeLabels(items) {
+      const points = items.map(({ G }) => {
+        const pts = [];
+        if (G.curve) for (let t = 0.04; t < 1; t += 0.06) pts.push(onCurve(G.curve, t).p);
+        return pts;
+      });
+      const placed = [];
+      const boxOf = (p, text) => { const w = 4 * text.length + 3; return { x0: p.x - w, x1: p.x + w, y0: p.y - 9, y1: p.y + 9 }; };
+      const cost = (box, self) => {
+        let c = 0;
+        for (const b of placed) if (box.x0 < b.x1 && b.x0 < box.x1 && box.y0 < b.y1 && b.y0 < box.y1) c += 10;
+        for (const q of A.states) {
+          const s = A.pos[q];
+          if (s && Math.hypot(Math.max(box.x0 - s.x, 0, s.x - box.x1), Math.max(box.y0 - s.y, 0, s.y - box.y1)) < R + 1) c += 8;
+        }
+        points.forEach((pts, i) => {
+          if (i !== self && pts.some(p => p.x > box.x0 && p.x < box.x1 && p.y > box.y0 && p.y < box.y1)) c += 4;
+        });
+        return c;
+      };
+      items.forEach(it => { if (!it.G.curve) placed.push(boxOf(it.G.lp, it.text)); });   // loops stay where they are
+      items.forEach((it, i) => {
+        const g = it.G;
+        if (!g.curve) return;
+        let best = g.lp, bestCost = cost(boxOf(g.lp, it.text), i);
+        for (const t of [0.5, 0.42, 0.58, 0.34, 0.66, 0.27, 0.73]) {
+          if (bestCost === 0) break;
+          const { p, n } = onCurve(g.curve, t);
+          const out = n.x * g.side.x + n.y * g.side.y >= 0 ? n : mul(n, -1);
+          for (const side of [out, mul(out, -1)]) {
+            const at = add(p, mul(side, 13));
+            const c = cost(boxOf(at, it.text), i) + Math.abs(t - 0.5) + (side === out ? 0 : 0.5);
+            if (c < bestCost) { best = at; bestCost = c; }
+          }
+        }
+        g.lp = best;
+        placed.push(boxOf(best, it.text));
+      });
     }
 
     /** The value of a hand-made arc for the pointer at p while dragging arrow from → to. */
@@ -263,14 +313,15 @@
       return Math.abs(off) < 14 ? 0 : Math.round(off);       // close to the straight line: snap straight
     }
 
-    /** Where the "new arrow" handle of a state sits: on its freest side, preferring the right. */
+    /** Where the "new arrow" handle of a state sits: at the lower right unless an arrow is in the way there. */
     function connPoint(q) {
       const P = A.pos[q];
       const used = usedAngles(q, lastEdges);
       for (const e of lastEdges) if (e.from === q && e.to === q) used.push(typeof arcs()[arcKey(q, q)] === 'number' ? arcs()[arcKey(q, q)] : autoLoopAngle(q, lastEdges));
-      const cands = [0, 45, -45, 90, -90, 135, -135, 180].map(d => d * Math.PI / 180);
-      let best = 0, bestGap = -1;
-      for (const c of cands) { const g = used.length ? Math.min(...used.map(u => angDist(c, u))) : 9; if (g > bestGap + 0.3) { best = c; bestGap = g; } }
+      const cands = [45, -45, 0, 90, -90, 135, -135, 180].map(d => d * Math.PI / 180);
+      const gap = c => used.length ? Math.min(...used.map(u => angDist(c, u))) : 9;
+      let best = cands.find(c => gap(c) > 0.5);
+      if (best === undefined) best = cands.reduce((b, c) => gap(c) > gap(b) ? c : b);
       return { x: P.x + CONN_D * Math.cos(best), y: P.y + CONN_D * Math.sin(best) };
     }
 
@@ -313,19 +364,20 @@
       const has = new Set(all.map(e => e.from + '\u0000' + e.to));
       lastEdges = all;
 
-      for (const e of all) {
-        if (!A.pos[e.from] || !A.pos[e.to]) continue;
+      const items = all.filter(e => A.pos[e.from] && A.pos[e.to])
+        .map(e => ({ e, G: geom(e, has, all), text: e.pending ? '?' : e.symbols.join(', ') }));
+      placeLabels(items);
+      for (const { e, G, text } of items) {
         const key = e.from + '\u0000' + e.to;
         const isSel = sel && sel.kind === 'edge' && sel.from === e.from && sel.to === e.to;
         const isActive = activeEdges.has(key);
         const isBending = drag && drag.kind === 'bend' && drag.moved && drag.from === e.from && drag.to === e.to;
         const g = el('g', { class: 'edge' + (isSel ? ' sel' : '') + (isActive ? ' active' : '') + (e.pending ? ' pending' : '') + (isBending ? ' bending' : ''), 'data-from': e.from, 'data-to': e.to }, edgeLayer);
         const marker = `url(#${isSel || isBending ? 'arrow-sel' : isActive ? 'arrow-active' : 'arrow'})`;
-        const G = geom(e, has, all);
         el('path', { d: G.d, class: 'edge-hit' }, g);
         el('path', { d: G.d, class: 'edge-line', 'marker-end': marker }, g);
         const t = el('text', { x: G.lp.x, y: G.lp.y, class: 'edge-label', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, g);
-        t.textContent = e.pending ? '?' : e.symbols.join(', ');
+        t.textContent = text;
         // grab handle in the middle of the arrow: shown on hover and when selected (drag = bend / turn the loop)
         if (view.mode === 'select' && (isSel || isBending || hoverEdge === key)) {
           el('circle', { cx: G.apex.x, cy: G.apex.y, r: 6, class: 'bend-handle' }, g);

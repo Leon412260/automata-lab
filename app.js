@@ -22,6 +22,8 @@
     return `<span class="sy">${s === '' ? 'λ' : esc(s)}</span>`;
   }
   function set(list) { return list.length ? `{${list.map(st).join(', ')}}` : '∅'; }
+  /** Text from core.js in which state names are marked (see validate). */
+  function rich(s) { return String(s).split(/[\u0001\u0002]/).map((part, i) => i % 2 ? st(part) : esc(part)).join(''); }
   const DH = '<span class="dh">δ̂</span>';
   const TURN = ' ⊢<sub>M</sub> ';
   const TRASH = '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>';
@@ -36,7 +38,7 @@
     deltaView: 'table',      // 'table' | 'equations'
     simWord: '',
     simStep: 0,
-    batch: '',
+    batch: '', batchOpen: false,
     classN: 3,
     hoverState: null,
     pop: null,               // null | {type:'selection'} | {type:'cell', q, a} | {type:'menu'}
@@ -46,7 +48,8 @@
     exId: null,
     exResult: null,          // result of the last "Check"
     draft: { kind: 'construct', code: '', title: '', text: '', require: 'FA', maxStates: '', op: 'intersection', A1: null, A2: null },
-    codeInput: '', codeError: null, codeBusy: false,   // "Start an exercise" form
+    codeInput: '', codeError: null, codeBusy: false,   // the "Enter a code" form (exercise or live session)
+    pending: null,           // arrow just drawn, still without a symbol
   };
   const EX_KEY = 'automata-lab:ex:';           // + id → the work on that exercise
   const CURRENT_EX_KEY = 'automata-lab:current-exercise';
@@ -61,7 +64,7 @@
     },
     onBackground(p) {
       ui.dragging = false;
-      if (ui.mode === 'state') { tryCommit(() => M.addState(A, null, p)); return; }
+      if (ui.mode === 'state') { tryCommit(() => M.addState(A, null, clearOf(p))); return; }
       ui.selected = null;
       if (ui.pop && ui.pop.type === 'selection') ui.pop = null;
       renderAll();
@@ -69,24 +72,26 @@
     onDragStart() { ui.dragging = true; hidePop(); },
     onDragEnd() { ui.dragging = false; setTimeout(renderPop, 0); },
     onCamera() { renderZoom(); renderPop(); },
-    onMove(q, p) { ui.dragging = false; const B = M.clone(A); B.pos[q] = { x: p.x, y: p.y }; commit(B); },
-    onAddState(p) { tryCommit(() => M.addState(A, null, p)); },
+    onMove(q, p) { ui.dragging = false; const B = M.clone(A); B.pos[q] = clearOf(p, q); commit(B); },
+    onAddState(p) { tryCommit(() => M.addState(A, null, clearOf(p))); },
     onToggleAccepting(q) { ui.dragging = false; ui.selected = { kind: 'state', id: q }; ui.pop = { type: 'selection' }; commit(M.setAccepting(A, q, !A.accepting.includes(q))); },
     onSourcePicked() { ui.dragging = false; renderHint(); },
     onConnect(from, to) {
       ui.dragging = false;
       ui.selected = { kind: 'edge', from, to };
       ui.pop = { type: 'selection', focusSymbol: true };
+      ui.pending = { from, to };
       renderAll();
     },
     /** Arrow dropped on empty space: a new state there, with the arrow already drawn to it. */
     onConnectNew(from, p) {
       ui.dragging = false;
       let B;
-      try { B = M.addState(A, null, p); } catch (e) { toast(e.message, true); return; }
+      try { B = M.addState(A, null, clearOf(p)); } catch (e) { toast(e.message, true); return; }
       const to = B.states[B.states.length - 1];
       ui.selected = { kind: 'edge', from, to };
       ui.pop = { type: 'selection', focusSymbol: true };
+      ui.pending = { from, to };
       commit(B);
     },
     /** A hand-made arrow shape (null = back to automatic). */
@@ -99,6 +104,8 @@
   });
 
   function save() {
+    // a shared automaton (…#m=) stays in the address until it is changed; from then on it is your own work
+    if (location.hash.startsWith('#m=')) history.replaceState(null, '', location.pathname + location.search);
     try { localStorage.setItem(ui.exercise ? EX_KEY + ui.exId : STORAGE_KEY, JSON.stringify(A)); } catch (e) { /* storage unavailable: ignore */ }
   }
 
@@ -130,11 +137,13 @@
     save(); renderAll();
   }
 
-  function load(obj, { resetHistory } = {}) {
+  /** keepSaved: show it without overwriting the saved work (it is saved as soon as it is changed). */
+  function load(obj, { resetHistory, keepSaved } = {}) {
     const B = M.autoLayout(M.normalize(obj));
-    ui.selected = null; ui.pop = null; ui.simStep = 0; ui.fitNext = true;
+    ui.selected = null; ui.pop = null; ui.simWord = ''; ui.simStep = 0; ui.batch = ''; ui.fitNext = true;
     if (B.type === 'NFA' && ui.tab === 'classes') ui.tab = 'definition';
     if (resetHistory) { undoStack = []; redoStack = []; A = B; save(); renderAll(); }
+    else if (keepSaved) { undoStack.push(JSON.stringify(A)); redoStack = []; A = B; renderAll(); }
     else commit(B);
   }
 
@@ -147,17 +156,24 @@
     toastTimer = setTimeout(() => { t.className = 'toast' + (isError ? ' error' : ''); }, isError ? 4200 : 2400);
   }
 
-  /** A free spot for a new state: the centre of the visible area, or the nearest free place around it. */
-  function freeSpot() {
-    const c = graph.visibleCenter();
-    for (let ring = 0; ring < 40; ring++) {
-      for (let i = 0; i < Math.max(1, ring * 6); i++) {
-        const ang = (2 * Math.PI * i) / Math.max(1, ring * 6);
-        const x = Math.round(c.x + ring * 110 * Math.cos(ang)), y = Math.round(c.y + ring * 110 * Math.sin(ang));
-        if (!A.states.some(q => A.pos[q] && Math.hypot(A.pos[q].x - x, A.pos[q].y - y) < 90)) return { x, y };
-      }
+  /** The automaton you were working on (outside exercises), or null. */
+  function ownAutomaton() {
+    try { const s = localStorage.getItem(STORAGE_KEY); if (s) return M.normalize(JSON.parse(s)); } catch (e) { /* ignore */ }
+    return null;
+  }
+
+  /** The point p, moved as little as needed so that a state there does not overlap another one (except q). */
+  function clearOf(p, q) {
+    const D = 2 * Graph.R + 14;
+    let at = { x: p.x, y: p.y };
+    for (let i = 0; i < 12; i++) {
+      const s = A.states.filter(r => r !== q && A.pos[r]).map(r => A.pos[r]).find(r => Math.hypot(r.x - at.x, r.y - at.y) < D - 1);
+      if (!s) break;
+      const d = Math.hypot(at.x - s.x, at.y - s.y);
+      const ang = (d > 1 ? Math.atan2(at.y - s.y, at.x - s.x) : 0) + i * 0.35;
+      at = { x: Math.round(s.x + D * Math.cos(ang)), y: Math.round(s.y + D * Math.sin(ang)) };
     }
-    return c;
+    return at;
   }
 
   // ---------- simulation model ----------
@@ -188,6 +204,15 @@
       if (s.kind === 'edge' && (!A.states.includes(s.from) || !A.states.includes(s.to))) ui.selected = null;
     }
     if (ui.pop && ui.pop.type === 'selection' && !ui.selected) ui.pop = null;
+    if (ui.pending) {
+      const { from, to } = ui.pending, s = ui.selected;
+      const exists = A.states.includes(from) && A.states.includes(to);
+      if (!exists || M.edgeSymbols(A, from, to).length) ui.pending = null;
+      else if (!s || s.kind !== 'edge' || s.from !== from || s.to !== to) {
+        ui.pending = null;
+        toast('The arrow was not added: an arrow needs a symbol.');
+      }
+    }
     $$('#type-seg button').forEach(b => b.setAttribute('aria-checked', String(b.dataset.type === A.type)));
     $$('.tools [data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === ui.mode)));
     if (A.type === 'NFA' && ui.tab === 'classes') ui.tab = 'definition';
@@ -197,9 +222,12 @@
     $('#btn-examples').hidden = !!ui.exercise;
     $('.ptabs [data-tab=classes]').hidden = A.type === 'NFA';
     $$('.ptabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === ui.tab)));
+    $('#btn-new').hidden = $('#btn-share').hidden = !!ui.exercise;
+    $('#btn-undo').hidden = $('#btn-redo').hidden = !undoStack.length && !redoStack.length;
     $('#btn-undo').disabled = !undoStack.length;
     $('#btn-redo').disabled = !redoStack.length;
     $('#empty').hidden = A.states.length > 0;
+    $('#empty-text').innerHTML = ui.mode === 'state' ? 'Click here to add a state.' : 'Choose <em>State</em> below, then click here.';
     renderGraph();
     renderHint();
     renderPanel();
@@ -208,11 +236,12 @@
 
   function renderHint() {
     const h = $('#stage-hint');
-    if (ui.mode === 'state') h.textContent = 'Click anywhere to place a new state';
-    else if (ui.mode === 'arrow') h.textContent = graph.pendingSource()
-      ? 'Now click the target state (the same one again = loop) or empty space (= new state)'
-      : 'Drag from one state to another, or click two states';
-    else h.textContent = A.states.length ? 'Drag the ➜ next to a state to draw an arrow · drag an arrow to bend it' : '';
+    const arrows = M.edges(A).length > 0;      // the hints disappear once the first arrow is drawn
+    if (ui.mode === 'arrow' && graph.pendingSource()) h.textContent = 'Now click the target state (the same one again = loop) or empty space (= new state)';
+    else if (!A.states.length || arrows) h.textContent = '';
+    else if (ui.mode === 'state') h.textContent = 'Click to add another state · choose Select to draw arrows';
+    else if (ui.mode === 'arrow') h.textContent = 'Drag from one state to another, or click two states';
+    else h.textContent = 'Drag the ➜ next to a state to draw an arrow';
   }
 
   function renderGraph() {
@@ -243,6 +272,7 @@
   function renderZoom() {
     $('#zoom-level').textContent = Math.round(graph.zoomLevel() * 100) + '%';
     $('#btn-fit').setAttribute('aria-pressed', String(graph.isAutoFit()));
+    $('#zoom').classList.toggle('compact', graph.isAutoFit());
   }
 
   function renderPanel() {
@@ -251,11 +281,19 @@
     const focusId = ae && body.contains(ae) ? ae.id : null;
     let selStart = null, selEnd = null;
     try { if (focusId) { selStart = ae.selectionStart; selEnd = ae.selectionEnd; } } catch (e) { /* not a text input */ }
-    const scroll = body.scrollTop;
+    // stay at the same place while the view is the same; another tab or exercise starts at the top
+    const view = ui.tab + '|' + (ui.exId || '');
+    const scroll = body.dataset.view === view ? body.scrollTop : 0;
+    const oldTree = body.querySelector('.tree-wrap');
+    const treeView = view + '|' + ui.simWord;
+    const treeScroll = oldTree && body.dataset.treeView === treeView ? oldTree.scrollLeft : null;
+    body.dataset.view = view; body.dataset.treeView = treeView;
     body.innerHTML = ui.tab === 'definition' ? definitionHTML() : ui.tab === 'simulation' ? simulationHTML()
       : ui.tab === 'classes' ? classesHTML() : exerciseHTML();
     mountMinis(body);
     body.scrollTop = scroll;
+    const tree = body.querySelector('.tree-wrap');
+    if (tree) tree.scrollLeft = treeScroll !== null ? treeScroll : +tree.dataset.root - tree.clientWidth / 2;   // the root in view
     if (focusId) {
       const e = document.getElementById(focusId);
       if (e) { e.focus(); try { if (selStart !== null) e.setSelectionRange(selStart, selEnd); } catch (err) { /* ignore */ } }
@@ -291,11 +329,12 @@
     pop.hidden = false;
     position(anchor, ui.pop.type === 'menu' ? 'below-end' : ui.pop.type === 'cell' ? 'below' : 'side');
     if (focused && document.getElementById(focused)) document.getElementById(focused).focus();
-    if (ui.pop.focusSymbol) {
+    if (ui.pop.focusSymbol) setTimeout(() => {      // looked up only then: the popover may be drawn again in between
+      if (!ui.pop || !ui.pop.focusSymbol) return;
       ui.pop.focusSymbol = false;
       const first = pop.querySelector(A.alphabet.length ? '.toggle.sym' : '#pop-sym');
-      if (first) setTimeout(() => first.focus(), 0);
-    }
+      if (first) first.focus();
+    }, 0);
   }
 
   function position(r, where) {
@@ -352,14 +391,15 @@
       for (const a of A.alphabet) {
         const on = syms.includes(a);
         const other = M.targets(A, p, a).filter(x => x !== r);
-        const hint = !on && A.type === 'FA' && other.length ? `<span class="to">now → ${esc(other[0])}</span>` : '';
+        const hint = !on && A.type === 'FA' && other.length ? `<span class="to">now → ${st(other[0])}</span>` : '';
         h += `<button type="button" class="toggle sym ${on ? 'on' : ''}" data-sym="${esc(a)}" aria-pressed="${on}">${esc(a)}${hint}</button>`;
       }
+      if (!ui.exercise && !ui.pop.other) h += `<button type="button" class="toggle sym plus" data-p="other" title="Another symbol (adds it to Σ)" aria-label="Another symbol">+</button>`;
       h += `</div>`;
     }
-    h += `<input type="text" id="pop-sym" placeholder="${A.alphabet.length ? 'Other symbol (adds it to Σ)' : 'Type a symbol, e.g. a'}" maxlength="20" spellcheck="false" autocomplete="off">`;
+    if (!A.alphabet.length || ui.pop.other) h += `<input type="text" id="pop-sym" placeholder="${A.alphabet.length ? 'Other symbol, then Enter' : 'Type a symbol, then Enter'}" maxlength="20" spellcheck="false" autocomplete="off">`;
     const custom = typeof (A.arcs || {})[M.arcKey(p, r)] === 'number';
-    h += `<div class="note">${A.alphabet.length ? 'Press a letter to switch it on/off · ' : ''}${p === r ? 'drag the loop to turn it' : 'drag the arrow to bend it'}${custom ? ` · <button type="button" class="linkish" data-p="autoshape">automatic shape</button>` : ''}</div>`;
+    if (custom) h += `<div class="note"><button type="button" class="linkish" data-p="autoshape">automatic shape</button></div>`;
     return h;
   }
 
@@ -400,6 +440,7 @@
     const s = ui.selected;
     if (!s) return;
     if (b.dataset.p === 'delete') { deleteSelection(); return; }
+    if (b.dataset.p === 'other') { ui.pop.other = true; renderPop(); $('#pop-sym').focus(); return; }
     if (b.dataset.p === 'autoshape' && s.kind === 'edge') { commit(M.setArc(A, s.from, s.to, null)); return; }
     if (s.kind === 'state') {
       if (b.dataset.p === 'acc') commit(M.setAccepting(A, s.id, !A.accepting.includes(s.id)));
@@ -447,6 +488,12 @@
     tryCommit(() => M.setEdgeSymbols(A, s.from, s.to, syms.includes(a) ? syms.filter(x => x !== a) : syms.concat(a)));
   });
 
+  // clicking the diagram does not move the focus: leave text fields first, so that the next letter is not typed there
+  document.addEventListener('pointerdown', e => {
+    const f = document.activeElement;
+    if (f && f.matches('input, textarea') && svg.contains(e.target)) f.blur();
+  }, true);
+
   // close popovers when clicking elsewhere (clicks on the diagram are handled by the graph itself)
   document.addEventListener('pointerdown', e => {
     if (!ui.pop || pop.contains(e.target)) return;
@@ -474,7 +521,7 @@
     const issues = M.validate(A);
     const errors = issues.filter(i => i.level === 'error');
     const status = !A.states.length ? '' : errors.length
-      ? `<span class="pill err">${errors.length} problem${errors.length > 1 ? 's' : ''}</span>`
+      ? `<span class="pill">not ${isFA ? 'an FA' : 'an NFA'} yet</span>`
       : `<span class="pill ok">valid ${isFA ? 'FA' : 'NFA'}</span>`;
     const q0 = A.initial ? st(A.initial) : '<i>q</i><sub>0</sub>';
 
@@ -483,7 +530,7 @@
       <div class="math">M = (<i>Q</i>, Σ, δ, ${q0}, <i>F</i>)</div>
       <dl class="formal">
         <dt><i>Q</i> =</dt><dd>${set(A.states)}</dd>
-        <dt>Σ =</dt><dd>{<input type="text" class="sigma-input" id="sigma" style="width:${Math.max(5, A.alphabet.join(', ').length + 3)}ch" value="${esc(A.alphabet.join(', '))}" placeholder="a, b" spellcheck="false" autocomplete="off" aria-label="Alphabet Σ" title="Edit the alphabet: symbols separated by commas">}</dd>
+        <dt>Σ =</dt><dd>{<input type="text" class="sigma-input" id="sigma" style="width:${A.alphabet.length ? Math.max(5, A.alphabet.join(', ').length + 3) : 11}ch" value="${esc(A.alphabet.join(', '))}" placeholder="e.g. a, b" spellcheck="false" autocomplete="off" aria-label="Alphabet Σ" title="Edit the alphabet: symbols separated by commas">}</dd>
         <dt><i>F</i> =</dt><dd>${set(A.accepting)}</dd>
       </dl>
     </div>`;
@@ -514,13 +561,14 @@
       }
       h += `</ul>`;
     }
-    h += `<div><button type="button" class="btn sm" data-action="add-state">+ State</button></div></div>`;
+    h += `</div>`;
 
-    const shown = issues.filter(i => i.level === 'error' || (i.level === 'info' && A.states.length && !/^Q is empty/.test(i.text)));
+    // remarks (not reachable, F = ∅) only once the automaton is complete
+    const shown = !A.states.length ? [] : errors.length ? errors : issues;
     if (shown.length) {
       h += `<ul class="issues">`;
       for (const i of shown) {
-        h += `<li class="${i.level}"><span>${esc(i.text)}</span>${i.fix === 'trap' ? '<button type="button" class="btn sm" data-action="trap">Add trap state</button>' : ''}</li>`;
+        h += `<li><span>${rich(i.rich)}</span>${i.fix === 'trap' ? '<button type="button" class="btn sm" data-action="trap">Add trap state</button>' : ''}</li>`;
       }
       h += `</ul>`;
     }
@@ -545,9 +593,20 @@
     h += `<div class="tape" aria-label="input word">`;
     if (!s.word.length) h += `<span class="next" title="empty word">λ</span>`;
     s.word.forEach((a, k) => { h += `<span class="${k < s.step ? 'read' : k === s.step ? 'next' : ''}">${esc(a)}</span>`; });
-    h += `</div></div>`;
+    h += `</div>`;
 
     const q0 = A.initial;
+    // the verdict sits right under the word, so it is always in view
+    const verdict = (ok, math) => `<div class="verdict ${ok ? 'yes' : 'no'}"><b>${ok ? 'Accepted' : 'Rejected'}</b><div>${math}</div></div>`;
+    const member = ok => `&nbsp;⇒&nbsp; <span class="nb">${wd(s.word)} ${ok ? '∈' : '∉'} L(M)</span>`;
+    if (s.kind === 'FA' && s.r.status !== 'stuck' && s.step === s.maxStep) {
+      const ok = s.r.status === 'accepted';
+      h += verdict(ok, `${DH}(${st(q0)}, ${wd(s.word)}) = ${st(s.r.final)} ${ok ? '∈' : '∉'} <i>F</i> ${member(ok)}`);
+    } else if (s.kind === 'NFA' && s.step === s.maxStep) {
+      const hit = s.r.acceptingHit, ok = hit.length > 0;
+      h += verdict(ok, `${DH}(${st(q0)}, ${wd(s.word)}) ∩ <i>F</i> = ${ok ? set(hit) + ' ≠ ∅' : '∅'} ${member(ok)}`);
+    }
+    h += `</div>`;
     const prefix = s.word.slice(0, s.step);
     if (s.kind === 'FA') {
       const cfgs = s.r.configs;
@@ -568,19 +627,12 @@
       if (stuckHere) {
         h += `<div class="verdict no">δ(${st(s.r.state)}, ${sy(s.r.symbol)}) is undefined
           <div class="txt">The computation cannot continue. In an FA δ must be total — add the missing arrow or a trap state.</div></div>`;
-      } else if (s.step === s.maxStep) {
-        const fin = s.r.final;
-        h += s.r.status === 'accepted'
-          ? `<div class="verdict yes">${DH}(${st(q0)}, ${wd(s.word)}) = ${st(fin)} ∈ <i>F</i> &nbsp;⇒&nbsp; ${wd(s.word)} ∈ L(M)</div>`
-          : `<div class="verdict no">${DH}(${st(q0)}, ${wd(s.word)}) = ${st(fin)} ∉ <i>F</i> &nbsp;⇒&nbsp; ${wd(s.word)} ∉ L(M)</div>`;
       }
       h += `</div>`;
     } else {
       const sets = s.r.sets;
       h += `<div class="card"><div class="lab"><span class="m">${DH}(${st(q0)}, ·) step by step</span>${A.type === 'FA' ? '<span class="pill">not deterministic</span>' : ''}</div>
-        <table class="steps"><thead><tr><th>read</th><th>${DH}(${st(q0)}, read)</th></tr></thead><tbody>`;
-      for (let k = 0; k <= s.step; k++) h += `<tr class="${k === s.step ? 'cur' : ''}"><td>${wd(s.word.slice(0, k))}</td><td>${set(sets[k])}</td></tr>`;
-      h += `</tbody></table><div class="explain">`;
+        <div class="explain">`;
       if (s.step === 0) {
         h += `${DH}(${st(q0)}, λ) = {${st(q0)}}`;
       } else {
@@ -594,14 +646,9 @@
         }
         h += `<br>= ${set(sets[s.step])}`;
       }
-      h += `</div>`;
-      if (s.step === s.maxStep) {
-        const last = sets[sets.length - 1];
-        const hit = s.r.acceptingHit;
-        h += hit.length
-          ? `<div class="verdict yes">${DH}(${st(q0)}, ${wd(s.word)}) ∩ <i>F</i> = ${set(hit)} ≠ ∅ &nbsp;⇒&nbsp; ${wd(s.word)} ∈ L(M)</div>`
-          : `<div class="verdict no">${DH}(${st(q0)}, ${wd(s.word)}) ∩ <i>F</i> = ${set(last.filter(q => A.accepting.includes(q)))} &nbsp;⇒&nbsp; ${wd(s.word)} ∉ L(M)</div>`;
-      }
+      h += `</div><table class="steps"><thead><tr><th>read</th><th>${DH}(${st(q0)}, read)</th></tr></thead><tbody>`;
+      for (let k = 0; k <= s.step; k++) h += `<tr class="${k === s.step ? 'cur' : ''}"><td>${wd(s.word.slice(0, k))}</td><td>${set(sets[k])}</td></tr>`;
+      h += `</tbody></table>`;
       h += `</div><div class="card"><div class="lab">All computations</div>` + computationTreeHTML(s) + `</div>`;
     }
     return h + batchHTML();
@@ -636,12 +683,13 @@
         <circle class="outer" r="13"/>${acc ? '<circle r="9.5"/>' : ''}
         <text text-anchor="middle" dominant-baseline="central">${esc(b)}${sub ? `<tspan class="sub" dy="0.3em">${esc(sub)}</tspan>` : ''}</text></g>`;
     }
-    return `<div class="tree-wrap"><svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${g}</svg></div>
+    return `<div class="tree-wrap" data-root="${px(tree.root)}"><svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${g}</svg></div>
       <div class="legend">Each path from the top is one computation. Green: accepting · dashed: stuck, δ(p, a) = ∅.${tree.truncated ? ' <b>Truncated — too many computations.</b>' : ''}</div>`;
   }
 
   function batchHTML() {
-    let h = `<div class="card"><div class="lab">Test several words</div>
+    if (!ui.batchOpen) return `<div><button type="button" class="btn sm text" data-action="batch">Test several words…</button></div>`;
+    let h = `<div class="card"><div class="lab"><span>Test several words</span><button type="button" class="btn sm text" data-action="batch">Hide</button></div>
       <input type="text" class="plain-input" id="sim-batch" value="${esc(ui.batch)}" placeholder="λ  a  ab  abb" spellcheck="false" autocomplete="off" aria-label="Words to test, separated by spaces">`;
     const words = ui.batch.split(/[\s,;]+/).filter(Boolean);
     if (words.length && A.states.length) {
@@ -730,7 +778,7 @@
         <circle r="12" style="${c ? `fill:${c}40;stroke:${c}` : ''}"/>
         <text text-anchor="middle" dominant-baseline="central">${esc(label[0])}${label[1] ? `<tspan class="sub" dy="0.3em">${esc(label[1])}</tspan>` : ''}</text></g>`;
     });
-    return `<div class="tree-wrap"><svg class="${ui.hoverState ? 'tree-focus' : ''}" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${g}</svg></div>
+    return `<div class="tree-wrap" data-root="${W / 2}"><svg class="${ui.hoverState ? 'tree-focus' : ''}" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${g}</svg></div>
       <div class="legend">Each node is the word on the path from the root, coloured by its class. Click a node to simulate it.</div>`;
   }
 
@@ -791,6 +839,16 @@
     const list = recentExercises().filter(r => r.code !== ex.code);
     list.unshift({ code: ex.code, title: ex.title || KIND_LABEL[ex.kind] });
     try { localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, 8))); } catch (e) { /* ignore */ }
+  }
+
+  /** "Enter a code": 4 digits join a live session, anything else opens an exercise. */
+  function submitCode() {
+    if (!isLiveCode(ui.codeInput)) { openByCode(ui.codeInput); return; }
+    if (!(ui.liveNameInput || '').trim()) {
+      const f = $('#live-name');
+      if (f && document.activeElement !== f) { f.focus(); return; }
+    }
+    liveJoin();
   }
 
   async function openByCode(raw) {
@@ -882,34 +940,44 @@
     minis.clear();
     if (ui.live && ui.live.role === 'host') return hostHTML();
     if (ui.exercise) return solveHTML(ui.exercise);
-    return EDITOR ? authorHTML() : joinHTML() + codeHTML();
+    return EDITOR ? authorHTML() : codeHTML();
   }
 
-  /** Enter a code to start an exercise. */
+  /** A live session has a code of 4 digits, everything else is an exercise. */
+  function isLiveCode(s) { return /^\d{4}$/.test(String(s || '').trim()); }
+
+  /** One field for both: the code of an exercise or of a live session (then a name is asked for too). */
   function codeHTML() {
-    let h = `<div class="card"><div class="lab">Start an exercise</div>
-      <div class="muted small">Enter the code of the exercise.</div>
-      <div class="sim-ctrl"><input type="text" id="ex-code" class="code-input" value="${esc(ui.codeInput || '')}" placeholder="e.g. DEMO-1" spellcheck="false" autocomplete="off" aria-label="Exercise code">
-        <button type="button" class="btn dark" data-action="opencode" ${ui.codeBusy ? 'disabled' : ''}>${ui.codeBusy ? 'Loading…' : 'Start'}</button></div>
-      ${ui.codeError ? `<div class="code-err">${esc(ui.codeError)}</div>` : ''}</div>`;
+    if (ui.liveNameInput === undefined) { try { ui.liveNameInput = localStorage.getItem('automata-lab:live-name') || ''; } catch (e) { ui.liveNameInput = ''; } }
+    const live = isLiveCode(ui.codeInput), busy = ui.codeBusy || ui.liveBusy;
+    let h = `<div class="card"><div class="lab">Enter a code</div>
+      <div class="sim-ctrl"><input type="text" id="ex-code" class="code-input" value="${esc(ui.codeInput || '')}" placeholder="e.g. DEMO-1" spellcheck="false" autocomplete="off" aria-label="Code of an exercise or of a live session">
+        <button type="button" class="btn dark" data-action="opencode" ${busy ? 'disabled' : ''}>${busy ? (live ? 'Joining…' : 'Loading…') : live ? 'Join' : 'Start'}</button></div>
+      ${live ? `<input type="text" id="live-name" class="plain-input title-input" maxlength="30" value="${esc(ui.liveNameInput)}" placeholder="Your name — a nickname is fine" autocomplete="off" aria-label="Your name">` : ''}
+      ${ui.codeError ? `<div class="code-err">${esc(ui.codeError)}</div>` : `<div class="muted small">${live ? 'A live session: choose a name and join.' : 'The code of an exercise, or the 4 digits of a live session.'}</div>`}</div>`;
     const recent = recentExercises();
     if (recent.length) {
       h += `<div class="card"><div class="lab">Continue</div><div class="list">`;
       for (const r of recent) h += `<button type="button" class="list-row" data-recent="${esc(r.code)}"><b>${esc(r.title)}</b><span>${esc(r.code)}</span></button>`;
       h += `</div></div>`;
     }
-    h += `<div class="muted small">Your work on each exercise is saved in this browser, so you can come back to it later.</div>`;
+    if (recent.length) h += `<div class="muted small">Your work on each exercise is saved in this browser.</div>`;
     return h;
   }
 
   function solveHTML(ex) {
     const req = M.requiredType(ex);
     const target = M.exerciseTarget(ex);
+    // only what the text does not say already
+    const pills = [], text = ex.text.replace(/\s+/g, ' '), sigma = `{${target.alphabet.join(', ')}}`;
+    if (req === 'any') pills.push('FA or NFA');
+    if (ex.maxStates && !new RegExp(`\\b${ex.maxStates}\\b`).test(text)) pills.push(`at most ${ex.maxStates} states`);
+    if (!text.includes(sigma)) pills.push('Σ = ' + sigma);
     const live = ui.live && ui.live.role === 'player'
       ? `<div class="live-strip"><span>Live session ${esc(ui.live.code)} · ${esc(ui.live.name)}</span><span class="live-timer">${timerText()}</span></div>` : '';
     let h = live + `<div class="card"><div class="lab"><span>${esc(ex.title || KIND_LABEL[ex.kind])}</span>${ex.code ? `<span class="pill">${esc(ex.code)}</span>` : ''}</div>
       <p class="ex-text">${esc(ex.text)}</p>
-      <div class="row-pills"><span class="pill">${req === 'any' ? 'FA or NFA' : req}</span>${ex.maxStates ? `<span class="pill">at most ${ex.maxStates} states</span>` : ''}<span class="pill">Σ = {${target.alphabet.map(esc).join(', ')}}</span></div>
+      ${pills.length ? `<div class="row-pills">${pills.map(p => `<span class="pill">${esc(p)}</span>`).join('')}</div>` : ''}
     </div>`;
     if (ex.kind === 'product') h += `<div class="card">${miniHTML('A1', ex.A1, 'A<sub>1</sub>')}${miniHTML('A2', ex.A2, 'A<sub>2</sub>')}</div>`;
     if (ex.kind === 'powerset') h += `<div class="card">${miniHTML('N', ex.nfa, 'N')}</div>`;
@@ -920,7 +988,7 @@
       if (r.ok) {
         h += `<div class="verdict yes">Correct — L(M) = ${langName(ex)}.${r.info.map(i => `<div class="txt">${esc(i)}</div>`).join('')}</div>`;
       } else if (r.problems.length) {
-        h += `<ul class="issues">${r.problems.map(p => `<li class="error"><span>${esc(p)}</span></li>`).join('')}</ul>`;
+        h += `<ul class="issues">${r.problems.map(p => `<li class="error"><span>${rich(p)}</span></li>`).join('')}</ul>`;
       } else {
         const w = r.counterexample.word, ws = w.join('');
         h += `<div class="verdict no">Counterexample: <i>w</i> = ${wd(w)}
@@ -930,8 +998,7 @@
           <button type="button" class="btn sm" data-word="${esc(ws)}">Simulate ${wd(w)} on your automaton</button>`;
       }
     }
-    h += `</div><div class="ex-foot"><button type="button" class="btn sm text" data-action="restart">Start over</button>
-      <button type="button" class="btn sm text" data-action="leave">Leave exercise</button></div>`;
+    h += `</div><div class="ex-foot"><button type="button" class="btn sm text" data-action="restart">Start over</button></div>`;
     return h;
   }
 
@@ -946,7 +1013,7 @@
       for (const e of exList) {
         h += `<div class="list-row static"><div class="lr-main"><b>${esc(e.code)}</b><span>${esc(e.exercise.title || KIND_LABEL[e.exercise.kind])}</span></div>
           <button type="button" class="btn sm" data-try="${esc(e.code)}">Try</button>
-          <button type="button" class="btn sm" data-live="${esc(e.code)}" title="Use this exercise in a live session in class">Live</button>
+          <button type="button" class="btn sm" data-live="${esc(e.code)}" title="Use this exercise in a live session">Live</button>
           <button type="button" class="icon-btn" data-remove="${esc(e.code)}" title="Remove ${esc(e.code)} from exercises.js" aria-label="Remove ${esc(e.code)}">${TRASH}</button></div>`;
       }
       h += `</div>`;
@@ -977,8 +1044,8 @@
     h += `<div class="field"><span>Code</span><input type="text" id="d-code" class="code-input short" value="${esc(d.code)}" spellcheck="false" autocomplete="off"></div>
       <input type="text" id="d-title" class="plain-input title-input" value="${esc(d.title || '')}" placeholder="Short title, e.g. Sheet 5 — product construction" autocomplete="off">
       <textarea id="d-text" rows="4" placeholder="${esc(defaultText(d))}">${esc(d.text)}</textarea>
-      <div class="sim-ctrl"><button type="button" class="btn" data-action="preview">Try it yourself</button>
-      <button type="button" class="btn" data-action="livestart" title="Use this exercise right away in a live session in class">Live session</button>
+      <div class="sim-ctrl wrap"><button type="button" class="btn" data-action="preview">Try it yourself</button>
+      <button type="button" class="btn" data-action="livestart" title="Use this exercise right away in a live session">Live session</button>
       <button type="button" class="btn dark grow" data-action="savefile">Save to exercises.js</button></div>
       <div class="small muted">Alternatively <button type="button" class="linkish" data-action="copylink">copy a direct link</button> (works without uploading anything).</div></div>`;
     return h;
@@ -1045,9 +1112,7 @@
     if (ui.live && ui.live.role === 'player') liveStop();
     ui.exercise = null; ui.exId = null; ui.exResult = null; ui.mode = 'select';
     try { localStorage.removeItem(CURRENT_EX_KEY); } catch (e) { /* ignore */ }
-    let B = null;
-    try { const s = localStorage.getItem(STORAGE_KEY); if (s) B = JSON.parse(s); } catch (e) { B = null; }
-    load(B || M.EXAMPLES[0].automaton, { resetHistory: true });
+    load(ownAutomaton() || M.EXAMPLES[0].automaton, { resetHistory: true });
   }
 
   // ---------- live sessions (class mode) ----------
@@ -1117,8 +1182,14 @@
     }
   }
 
-  function appAddress() { return location.host + location.pathname.replace(/index\.html$/, ''); }
-  function joinURL(code) { return location.origin + location.pathname.replace(/index\.html$/, '') + '#live=' + code; }
+  /** Address for others: the published site, also when the app is opened from this computer; never with ?mode=editor. */
+  function siteURL() {
+    const own = location.protocol === 'file:' || /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+    const here = location.href.split(/[?#]/)[0].replace(/index\.html$/, '');
+    return own && window.AUTOMATA_LAB_SITE ? window.AUTOMATA_LAB_SITE : here;
+  }
+  function appAddress() { return siteURL().replace(/^https?:\/\//, ''); }
+  function joinURL(code) { return siteURL() + '#live=' + code; }
 
   /** Editor: open a session for an exercise. */
   async function liveStart(ex) {
@@ -1204,11 +1275,10 @@
   const LIVE_JOIN_KEY = 'automata-lab:live-join';   // sessionStorage: rejoin after a reload of the page
 
   async function liveJoin(rejoin) {
-    const code = rejoin ? rejoin.code : (ui.liveCodeInput || '').replace(/\D/g, '');
+    const code = rejoin ? rejoin.code : (ui.codeInput || '').replace(/\D/g, '');
     const name = rejoin ? rejoin.name : (ui.liveNameInput || '').trim().slice(0, 30);
-    if (code.length !== 4) { ui.liveError = 'A session code has 4 digits.'; renderPanel(); return; }
-    if (!name) { ui.liveError = 'Choose a name (a nickname is fine).'; renderPanel(); return; }
-    ui.liveError = null; ui.liveBusy = true; renderPanel();
+    if (!name) { ui.codeError = 'Choose a name (a nickname is fine).'; renderPanel(); return; }
+    ui.codeError = null; ui.liveBusy = true; renderPanel();
     const b = Live.get();
     let gone = false;                       // the session really is not open (as opposed to a network problem)
     try {
@@ -1221,7 +1291,7 @@
       if (before) await b.setPlayer(code, { name });
       else await b.setPlayer(code, { name, joinedAt: Date.now(), attempts: 0, solved: false });
       try { localStorage.setItem('automata-lab:live-name', name); } catch (e) { /* ignore */ }
-      ui.liveBusy = false;
+      ui.liveBusy = false; ui.codeInput = '';
       liveStop();
       try { sessionStorage.setItem(LIVE_JOIN_KEY, JSON.stringify({ code, name })); } catch (e) { /* ignore */ }
       ui.live = { role: 'player', code, name, meta, attempts: (before && before.attempts) || 0, solved: !!(before && before.solved), unsubs: [] };
@@ -1236,7 +1306,7 @@
       ui.liveBusy = false;
       if (gone) { try { sessionStorage.removeItem(LIVE_JOIN_KEY); } catch (err) { /* ignore */ } }
       if (rejoin) { toast(gone ? 'The live session is no longer open.' : 'Could not reconnect to the live session — reload the page to try again.', !gone); renderPanel(); return; }
-      ui.liveError = e.message;
+      ui.codeError = e.message;
       renderPanel();
     }
   }
@@ -1269,7 +1339,7 @@
     let h = `<div class="card live-card"><div class="lab"><span>Live session</span>${Live.isTestMode() ? '<span class="pill" title="No Firebase project configured yet: works only between tabs of this browser">test mode</span>' : '<span class="pill ok">live</span>'}</div>
       <div class="live-title">${esc(L.meta.title || '')}</div>
       <div class="live-code">${esc(L.code)}</div>
-      <div class="muted small">Join: open the app → <b>Exercise</b> → <b>Join a live session</b>, or <span class="mono">${esc(joinURL(L.code))}</span></div>
+      <div class="muted small">Join: open the app → <b>Exercise</b> → enter the code, or <span class="mono">${esc(joinURL(L.code))}</span></div>
       <div class="live-timer-row"><span class="live-timer">${timerText()}</span>
         <span class="row-btns">${L.meta.endsAt ? '<button type="button" class="btn sm" data-livetimer="add">+1 min</button><button type="button" class="btn sm text" data-livetimer="0">Stop timer</button>'
           : [3, 5, 10].map(m => `<button type="button" class="btn sm" data-livetimer="${m}">${m} min</button>`).join('')}</span></div>
@@ -1304,7 +1374,7 @@
     box.innerHTML = `<div class="proj">
       <button type="button" class="btn sm proj-close" data-action="liveproject">Close</button>
       <div class="proj-title">${esc(L.meta.title || '')}</div>
-      <div class="proj-join">Open <b>${esc(appAddress())}</b> → Exercise → Join a live session</div>
+      <div class="proj-join">Open <b>${esc(appAddress())}</b> → Exercise → enter the code</div>
       <div class="proj-code">${esc(L.code)}</div>
       <div class="live-timer proj-timer">${timerText()}</div>
       <div class="proj-stats"><span><b>${st.solved}</b> of <b>${st.joined}</b> solved</span></div>
@@ -1312,18 +1382,7 @@
     </div>`;
   }
 
-  /** Participant: the "Join a live session" card. */
-  function joinHTML() {
-    if (ui.liveNameInput === undefined) { try { ui.liveNameInput = localStorage.getItem('automata-lab:live-name') || ''; } catch (e) { ui.liveNameInput = ''; } }
-    return `<div class="card"><div class="lab">Join a live session</div>
-      <div class="muted small">Enter the 4-digit session code shown in class and a name of your choice — a nickname is fine.</div>
-      <div class="sim-ctrl"><input type="text" id="live-code" class="code-input live-code-input" inputmode="numeric" maxlength="4" value="${esc(ui.liveCodeInput || '')}" placeholder="0000" autocomplete="off" aria-label="Session code">
-        <input type="text" id="live-name" class="plain-input title-input" maxlength="30" value="${esc(ui.liveNameInput || '')}" placeholder="Your name" autocomplete="off" aria-label="Your name"></div>
-      <button type="button" class="btn dark wide" data-action="livejoin" ${ui.liveBusy ? 'disabled' : ''}>${ui.liveBusy ? 'Joining…' : 'Join'}</button>
-      ${ui.liveError ? `<div class="code-err">${esc(ui.liveError)}</div>` : ''}</div>`;
-  }
-
-  function exerciseLink(ex) { return location.href.split('#')[0] + '#x=' + encode(ex); }
+  function exerciseLink(ex) { return siteURL() + '#x=' + encode(ex); }
 
   // ---------- events: header & tools ----------
   $$('#type-seg button').forEach(b => b.addEventListener('click', () => {
@@ -1375,7 +1434,8 @@
   });
   $('#btn-new').addEventListener('click', () => {
     ui.selected = null; ui.pop = null; ui.mode = 'state'; ui.fitNext = true;
-    commit(ui.exercise ? freshAnswer(ui.exercise) : M.empty(A.type));
+    ui.simWord = ''; ui.simStep = 0; ui.batch = '';
+    commit(M.setAlphabet(M.empty(A.type), ['a', 'b']));
     toast('New automaton — Undo restores the previous one.');
   });
   $('#ex-chip').addEventListener('click', leaveExercise);
@@ -1394,7 +1454,7 @@
     return JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0))));
   }
   $('#btn-share').addEventListener('click', async () => {
-    const url = location.href.split('#')[0] + '#m=' + encode(A);
+    const url = siteURL() + '#m=' + encode(A);
     try { await navigator.clipboard.writeText(url); toast('Link copied — whoever opens it gets this automaton.'); }
     catch (e) { window.prompt('Copy this link:', url); }
   });
@@ -1402,14 +1462,18 @@
   // ---------- events: panel ----------
   const body = $('#panel-body');
   body.addEventListener('change', e => {
-    if (e.target.id === 'sigma') tryCommit(() => M.setAlphabet(A, M.parseList(e.target.value)));
+    if (e.target.id === 'sigma') { tryCommit(() => M.setAlphabet(A, M.parseList(e.target.value))); e.target.value = A.alphabet.join(', '); }
   });
   body.addEventListener('input', e => {
     if (e.target.id === 'd-text') { ui.draft.text = e.target.value; return; }
     if (e.target.id === 'd-code') { ui.draft.code = e.target.value; return; }
     if (e.target.id === 'd-title') { ui.draft.title = e.target.value; return; }
-    if (e.target.id === 'ex-code') { ui.codeInput = e.target.value; return; }
-    if (e.target.id === 'live-code') { ui.liveCodeInput = e.target.value; return; }
+    if (e.target.id === 'ex-code') {
+      const was = isLiveCode(ui.codeInput), err = ui.codeError;
+      ui.codeInput = e.target.value; ui.codeError = null;
+      if (err || was !== isLiveCode(ui.codeInput)) renderPanel();
+      return;
+    }
     if (e.target.id === 'live-name') { ui.liveNameInput = e.target.value; return; }
     if (e.target.id === 'd-max') { ui.draft.maxStates = e.target.value; return; }
     if (e.target.id === 'sim-word') { ui.simWord = e.target.value; ui.simStep = 0; renderPanel(); renderGraph(); }
@@ -1417,8 +1481,7 @@
   });
   body.addEventListener('keydown', e => {
     if (e.key === 'Enter' && e.target.id === 'sim-word') { e.preventDefault(); simAction('step'); }
-    if (e.key === 'Enter' && e.target.id === 'ex-code') { e.preventDefault(); openByCode(e.target.value); }
-    if (e.key === 'Enter' && (e.target.id === 'live-code' || e.target.id === 'live-name')) { e.preventDefault(); liveJoin(); }
+    if (e.key === 'Enter' && (e.target.id === 'ex-code' || e.target.id === 'live-name')) { e.preventDefault(); submitCode(); }
     if (e.key === 'Enter' && e.target.id === 'sigma') e.target.blur();
   });
   body.addEventListener('scroll', () => { if (ui.pop && ui.pop.type === 'cell') { ui.pop = null; hidePop(); $$('.cell.open').forEach(b => b.classList.remove('open')); } });
@@ -1434,7 +1497,7 @@
       else if (x.dataset.livetimer !== undefined) liveSetTimer(x.dataset.livetimer === 'add' ? 'add' : +x.dataset.livetimer);
       else if (x.dataset.try !== undefined) {
         const item = exList.find(i => i.code === x.dataset.try);
-        if (item) { enterExercise(M.normalizeExercise(Object.assign({}, item.exercise, { code: item.code }))); toast('This is how the exercise looks when it is opened. “Leave exercise” brings you back.'); }
+        if (item) { enterExercise(M.normalizeExercise(Object.assign({}, item.exercise, { code: item.code }))); toast('This is how the exercise looks when it is opened. “Leave” at the top brings you back.'); }
       } else if (x.dataset.remove !== undefined) {
         const code = x.dataset.remove;
         if (!window.confirm(`Remove the exercise ${code} from exercises.js? It can no longer be opened with this code.`)) return;
@@ -1453,9 +1516,8 @@
       return;
     }
     const act = e.target.closest('[data-action]');
-    if (act && ['check', 'preview', 'copylink', 'savefile', 'opencode', 'restart', 'leave', 'livestart', 'livejoin', 'liveend', 'liveproject', 'livenames'].includes(act.dataset.action)) {
+    if (act && ['check', 'preview', 'copylink', 'savefile', 'opencode', 'restart', 'livestart', 'liveend', 'liveproject', 'livenames'].includes(act.dataset.action)) {
       const a = act.dataset.action;
-      if (a === 'livejoin') { liveJoin(); return; }
       if (a === 'liveend') { liveEnd(); return; }
       if (a === 'liveproject') { ui.live.projecting = !ui.live.projecting; renderProjector(); return; }
       if (a === 'livenames') { ui.live.showNames = !ui.live.showNames; renderPanel(); return; }
@@ -1465,11 +1527,12 @@
         liveStart(ex);
         return;
       }
-      if (a === 'opencode') { openByCode(ui.codeInput); return; }
+      if (a === 'opencode') { submitCode(); return; }
       if (a === 'savefile') {
         const d = ui.draft;
         const code = M.normalizeCode(d.code);
         if (!code) { toast('Choose a code: letters, digits and dashes, e.g. S05-1.', true); return; }
+        if (isLiveCode(code)) { toast('Codes of 4 digits are for live sessions — add a letter.', true); return; }
         if (exList.some(i => i.code === code)) { toast(`The code ${code} is already used — choose another one, or remove the old exercise first.`, true); return; }
         let ex;
         try { ex = buildExercise(); } catch (err) { toast(err.message, true); return; }
@@ -1481,12 +1544,11 @@
         return;
       }
       if (a === 'check') { ui.exResult = M.checkExercise(ui.exercise, A); liveReport(ui.exResult); renderPanel(); }
-      else if (a === 'leave') leaveExercise();
       else if (a === 'restart') { ui.selected = null; ui.pop = null; ui.mode = 'state'; ui.fitNext = true; commit(freshAnswer(ui.exercise)); }
       else {
         let ex;
         try { ex = buildExercise(); } catch (err) { toast(err.message, true); return; }
-        if (a === 'preview') { enterExercise(ex); toast('This is how the exercise looks when it is opened. “Leave exercise” brings you back.'); }
+        if (a === 'preview') { enterExercise(ex); toast('This is how the exercise looks when it is opened. “Leave” at the top brings you back.'); }
         else {
           const url = exerciseLink(ex);
           try { await navigator.clipboard.writeText(url); toast('Link copied — opening it starts this exercise.'); }
@@ -1504,7 +1566,7 @@
       renderAll();
     } else if (t.dataset.sim) simAction(t.dataset.sim);
     else if (t.dataset.action === 'trap') commit(M.addTrapState(A));
-    else if (t.dataset.action === 'add-state') tryCommit(() => M.addState(A, null, freeSpot()));
+    else if (t.dataset.action === 'batch') { ui.batchOpen = !ui.batchOpen; renderPanel(); const f = $('#sim-batch'); if (f) f.focus(); }
     else if (t.dataset.dview) { ui.deltaView = t.dataset.dview; renderPanel(); }
     else if (t.dataset.n) { ui.classN = Math.max(0, Math.min(ui.classN + +t.dataset.n, maxLenFor(A.alphabet.length))); renderPanel(); }
     else if (t.dataset.select !== undefined) { ui.selected = { kind: 'state', id: t.dataset.select }; ui.pop = { type: 'selection' }; renderAll(); }
@@ -1560,10 +1622,10 @@
   window.addEventListener('hashchange', () => {
     const h = location.hash;
     try {
-      if (h.startsWith('#live=')) { ui.liveCodeInput = h.slice(6).replace(/\D/g, ''); ui.tab = 'exercise'; renderAll(); }
-      else if (h.startsWith('#code=')) { openByCode(decodeURIComponent(h.slice(6))); }
+      if (h.startsWith('#live=')) { if (ui.exercise) leaveExercise(); ui.codeInput = h.slice(6).replace(/\D/g, ''); ui.tab = 'exercise'; renderAll(); }
+      else if (h.startsWith('#code=')) { ui.tab = 'exercise'; renderAll(); openByCode(decodeURIComponent(h.slice(6))); }
       else if (h.startsWith('#x=')) { enterExercise(M.normalizeExercise(decode(h.slice(3)))); }
-      else if (h.startsWith('#m=')) { if (ui.exercise) leaveExercise(); load(decode(h.slice(3))); toast('Automaton loaded from the link.'); }
+      else if (h.startsWith('#m=')) { const B = M.normalize(decode(h.slice(3))); if (ui.exercise) leaveExercise(); load(B, { keepSaved: true }); toast('Automaton loaded from the link — Undo brings your own back.'); return; }
       else return;
     } catch (e) { toast('The link is not valid.', true); }
     history.replaceState(null, '', location.pathname + location.search);
@@ -1571,46 +1633,44 @@
 
   function start() {
     if (EDITOR) { $('#editor-pill').hidden = false; document.title = 'Automata Lab — editor'; }
-    let initial = null, fromLink = false, exercise = null, exerciseId = null;
-    if (location.hash.startsWith('#m=')) {
-      try { initial = decode(location.hash.slice(3)); fromLink = true; } catch (e) { toast('The link does not contain a valid automaton.', true); }
-      history.replaceState(null, '', location.pathname + location.search);
-    } else if (location.hash.startsWith('#live=')) {
-      // a link like …/#live=4821 opens the "Join a live session" form with the code filled in
-      ui.liveCodeInput = location.hash.slice(6).replace(/\D/g, '');
-      history.replaceState(null, '', location.pathname + location.search);
+    // a link never overwrites the saved work: your own automaton is loaded first
+    const hash = location.hash, own = ownAutomaton();
+    load(own || M.EXAMPLES[0].automaton, { resetHistory: true });
+    const clearHash = () => history.replaceState(null, '', location.pathname + location.search);
+    let exercise = null, exerciseId = null;
+    if (hash.startsWith('#m=')) {
+      try {
+        load(decode(hash.slice(3)), { keepSaved: true });
+        if (!own) { undoStack = []; renderAll(); }
+        history.replaceState(null, '', location.pathname + location.search + hash);   // still there after a reload
+        toast(own ? 'Automaton loaded from the link — Undo brings your own back.' : 'Automaton loaded from the link.');
+      } catch (e) { clearHash(); toast('The link does not contain a valid automaton.', true); }
+    } else if (hash.startsWith('#live=')) {
+      // a link like …/#live=4821 opens the form with the code filled in
+      ui.codeInput = hash.slice(6).replace(/\D/g, '');
+      clearHash();
       try { localStorage.removeItem(CURRENT_EX_KEY); } catch (e) { /* ignore */ }
-      let B = null;
-      try { const s = localStorage.getItem(STORAGE_KEY); if (s) B = JSON.parse(s); } catch (e) { B = null; }
-      load(B || M.EXAMPLES[0].automaton, { resetHistory: true });
       ui.tab = 'exercise'; renderAll();
-      Guide.init();
+      Guide.init(false);
       return;
-    } else if (location.hash.startsWith('#code=')) {
+    } else if (hash.startsWith('#code=')) {
       // a link like …/index.html#code=S05-1 opens that exercise directly
-      const code = decodeURIComponent(location.hash.slice(6));
-      history.replaceState(null, '', location.pathname + location.search);
-      load(M.EXAMPLES[0].automaton, { resetHistory: true });
-      openByCode(code);
-      Guide.init();
+      clearHash();
+      ui.tab = 'exercise'; renderAll();
+      openByCode(decodeURIComponent(hash.slice(6)));
+      Guide.init(false);
       return;
-    } else if (location.hash.startsWith('#x=')) {
-      try { exercise = M.normalizeExercise(decode(location.hash.slice(3))); } catch (e) { toast('The link does not contain a valid exercise.', true); }
-      history.replaceState(null, '', location.pathname + location.search);
+    } else if (hash.startsWith('#x=')) {
+      try { exercise = M.normalizeExercise(decode(hash.slice(3))); } catch (e) { toast('The link does not contain a valid exercise.', true); }
+      clearHash();
     } else {
       try {
         const s = localStorage.getItem(CURRENT_EX_KEY);
         if (s) { exercise = M.normalizeExercise(JSON.parse(s)); exerciseId = localStorage.getItem(CURRENT_EX_ID_KEY); }
       } catch (e) { exercise = null; }
     }
-    if (exercise) { enterExercise(exercise, exerciseId); Guide.init(); liveResume(); liveSweep(); return; }
-    if (!initial) {
-      try { const s = localStorage.getItem(STORAGE_KEY); if (s) initial = JSON.parse(s); } catch (e) { /* ignore */ }
-    }
-    try { load(initial || M.EXAMPLES[0].automaton, { resetHistory: true }); }
-    catch (e) { load(M.EXAMPLES[0].automaton, { resetHistory: true }); }
-    if (fromLink) toast('Automaton loaded from the link.');
-    Guide.init();
+    if (exercise) enterExercise(exercise, exerciseId);
+    Guide.init(!EDITOR && !exercise && !/^#(m|x)=/.test(hash));
     liveResume();
     liveSweep();
   }

@@ -1,4 +1,4 @@
-/* Automata Lab — short animated welcome guide (shown when the app opens). */
+/* Automata Lab — short animated welcome guide (shown the first time the app is opened). */
 (function (root) {
   'use strict';
   const KEY = 'automata-lab:guide-hidden';
@@ -141,8 +141,6 @@
     clearInterval(simTimer); simTimer = null;
     const s = SLIDES[index];
     const last = index === SLIDES.length - 1;
-    let hidden = false;
-    try { hidden = localStorage.getItem(KEY) === '1'; } catch (e) { /* ignore */ }
     host.innerHTML = `
       <div class="guide" role="dialog" aria-modal="true" aria-labelledby="g-title">
         <div class="stage-art">${s.art()}</div>
@@ -151,7 +149,6 @@
           <h2 id="g-title">${s.title}</h2>
           <p>${s.text}</p>
         </div>
-        <label class="noshow"><input type="checkbox" id="g-noshow" ${hidden ? 'checked' : ''}> Don't show this when the app opens</label>
         <div class="gfoot">
           <div class="dots">${SLIDES.map((_, i) => `<i class="${i === index ? 'on' : ''}"></i>`).join('')}</div>
           ${index > 0 ? '<button type="button" class="btn" data-g="back">Back</button>' : '<button type="button" class="btn text" data-g="close">Skip</button>'}
@@ -172,7 +169,8 @@
 
   function close() { clearInterval(simTimer); simTimer = null; if (host) { host.hidden = true; host.innerHTML = ''; } }
 
-  function init() {
+  /** auto: the app was opened normally (not with a link, an exercise in progress or as the editor). */
+  function init(auto) {
     host = document.getElementById('guide');
     host.addEventListener('click', e => {
       if (e.target === host) return close();
@@ -182,18 +180,16 @@
       if (b.dataset.g === 'back') { index = Math.max(index - 1, 0); render(); }
       if (b.dataset.g === 'close') close();
     });
-    host.addEventListener('change', e => {
-      if (e.target.id === 'g-noshow') { try { localStorage.setItem(KEY, e.target.checked ? '1' : '0'); } catch (err) { /* ignore */ } }
-    });
     document.addEventListener('keydown', e => {
       if (host.hidden) return;
       if (e.key === 'Escape') close();
       if (e.key === 'ArrowRight' && index < SLIDES.length - 1) { index++; render(); }
       if (e.key === 'ArrowLeft' && index > 0) { index--; render(); }
     });
-    let hide = false;
-    try { hide = localStorage.getItem(KEY) === '1'; } catch (e) { /* ignore */ }
-    if (!hide) open();
+    if (!auto) return;
+    let seen = false;
+    try { seen = localStorage.getItem(KEY) === '1'; localStorage.setItem(KEY, '1'); } catch (e) { /* ignore */ }
+    if (!seen) open();
   }
 
   root.Guide = { init, open, close, isOpen: () => host && !host.hidden };

@@ -20,16 +20,16 @@ no account. Your automata and your answers are saved in your browser automatical
 - **Shape:** drag an arrow to bend it, drag a loop to move it around its state;
   double-click an arrow to go back to the automatic shape. **Arrange** lays everything out
   like in the exercise solutions.
-- **Zoom:** scroll on the diagram, or use + / − / Fit at the top right. Drag the background to move.
-- **Undo / Redo:** the arrows at the top, or `Ctrl+Z` / `Ctrl+Y`.
+- **Zoom:** scroll on the diagram, or use the button at the top right (+ / − appear when you point at it). Drag the background to move.
+- **Undo / Redo:** the arrows at the top (they appear after your first change), or `Ctrl+Z` / `Ctrl+Y`.
 
 ## The tabs on the right
 
 - **Definition** — the formal definition M = (Q, Σ, δ, q₀, F) and the transition function δ
-  as a table (click a cell to change it) or as equations. Problems are listed below.
+  as a table (click a cell to change it) or as equations. What is still missing is listed below.
 - **Simulation** — type a word and press **Step**: you see the computation as configurations
   (q, w) ⊢ (p, w′), δ̂ step by step and whether the word is in L(M). For an NFA you also see all
-  computations as a tree. Test several words at once at the bottom.
+  computations as a tree. **Test several words…** is at the bottom.
 - **Classes** (FA only) — the classes Kl[q] = { w ∈ Σ* | δ̂(q₀, w) = q } with their words and a
   coloured prefix tree. Click a word to simulate it.
 - **Exercise** — see below.
@@ -53,3 +53,4 @@ Your work on each exercise is kept in your browser; **Continue** lists the exerc
 - State names like `q0` or `p_ba` are shown as q₀ and p_ba with a subscript.
 
 **Share link** (top right) copies a link that contains your current automaton.
+Opening such a link does not overwrite your own automaton until you change something; **Undo** brings it back.

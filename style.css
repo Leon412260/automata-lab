@@ -119,6 +119,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .zoom button:hover { background: var(--soft); color: var(--ink); }
 .zoom #btn-fit { border-top: 1px solid var(--line); border-radius: 0 0 8px 8px; margin-top: 2px; }
 .zoom #btn-fit[aria-pressed=true] { color: var(--accent); }
+.zoom.compact:not(:hover):not(:focus-within) > :not(#btn-fit) { display: none; }
+.zoom.compact:not(:hover):not(:focus-within) #btn-fit { border-top: 0; border-radius: 8px; margin-top: 0; }
 .zoom .zl { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 #btn-theme .sun { display: none; }
@@ -188,6 +190,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .toggle:hover { border-color: var(--line-hover); }
 .toggle.on { background: var(--ink); border-color: var(--ink); color: var(--on-ink); }
 .toggle.sym, .toggle.st { font-family: var(--math); font-style: italic; font-size: 16px; min-width: 40px; justify-content: center; }
+.toggle.plus { font-style: normal; color: var(--muted); border-style: dashed; min-width: 32px; padding: 0 9px; }
+.toggle .to .st { font-family: var(--math); font-size: 13px; }
 .toggle .to { font-family: Inter, system-ui, sans-serif; font-style: normal; font-size: 11px; opacity: .65; }
 .menu { padding: 6px; gap: 2px; min-width: 260px; }
 .menu button { border: 0; background: none; text-align: left; padding: 8px 10px; border-radius: 8px; cursor: pointer; display: flex; flex-direction: column; gap: 1px; }
@@ -196,9 +200,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .menu button span { font-size: 12px; color: var(--muted); }
 
 /* ---------- panel ---------- */
-.ptabs { margin: 14px 16px 0; display: flex; }
+/* tabs and cards keep the same width whether or not the panel scrolls */
+.ptabs-wrap, .panel-body { scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--line-hover) transparent; }
+.ptabs-wrap { overflow: hidden; flex: none; padding: 14px 10px 0 16px; }
+.ptabs { display: flex; }
 .ptabs button { flex: 1; }
-.panel-body { overflow: auto; padding: 16px 16px 48px; min-height: 0; flex: 1; display: flex; flex-direction: column; gap: 12px; }
+.panel-body { overflow: hidden auto; padding: 16px 10px 48px 16px; min-height: 0; flex: 1; display: flex; flex-direction: column; gap: 12px; }
 .card { border: 1px solid var(--line); border-radius: 14px; background: var(--surface); padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
 .card.soft { background: var(--soft); border-color: transparent; }
 .lab { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -214,7 +221,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .st, .sy { font-style: italic; }
 .st sub { font-style: normal; font-size: .72em; }
 .math { font-size: 17px; line-height: 1.7; }
-.formal { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; align-items: baseline; font-family: var(--math); font-size: 16.5px; }
+.formal { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; align-items: baseline; font-family: var(--math); font-size: 16.5px; }
 .formal dt { color: var(--muted); }
 .formal dd { margin: 0; }
 .sigma-input {
@@ -238,10 +245,10 @@ table.delta tr.sel td.name { background: var(--accent-soft); }
   font-family: var(--math); font-style: italic; font-size: 16px; cursor: pointer; color: var(--ink);
 }
 .cell:hover { border-color: var(--line-hover); }
-.cell.undef { background: var(--err-bg); color: var(--err); font-style: normal; }
+.cell.undef { background: transparent; border: 1px dashed var(--line-hover); color: var(--muted); }
 .cell.open { border-color: var(--accent); }
 .eqs { columns: 2; font-family: var(--math); font-size: 15.5px; margin: 0; padding: 0; list-style: none; line-height: 1.8; }
-.eqs .undef { color: var(--err); }
+.eqs .undef { color: var(--muted); }
 
 ul.issues { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
 ul.issues li { font-size: 13px; padding: 8px 10px; border-radius: 10px; background: var(--soft); color: var(--text-2); display: flex; gap: 8px; align-items: center; justify-content: space-between; }
@@ -253,7 +260,8 @@ ul.issues li.error { background: var(--err-bg); color: var(--err); }
   font-family: var(--math); font-style: italic; font-size: 18px;
 }
 .sim-ctrl { display: flex; gap: 6px; align-items: center; }
-.sim-ctrl .grow { flex: 1; }
+.sim-ctrl .grow { flex: 1; justify-content: center; }
+.sim-ctrl.wrap { flex-wrap: wrap; }
 .tape { display: flex; flex-wrap: wrap; }
 .tape span {
   min-width: 32px; height: 36px; display: inline-flex; align-items: center; justify-content: center;
@@ -265,6 +273,7 @@ ul.issues li.error { background: var(--err-bg); color: var(--err); }
 .tape span.read { color: var(--muted-3); background: var(--soft); }
 .tape span.next { border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); position: relative; z-index: 1; }
 .computation { font-family: var(--math); font-size: 16.5px; line-height: 2; }
+.computation .cfg { display: inline-block; max-width: 100%; overflow-wrap: anywhere; line-height: 1.6; }
 .computation .cfg.cur { background: var(--accent-soft); border-radius: 6px; padding: 1px 4px; }
 .explain { font-family: var(--math); font-size: 16.5px; line-height: 1.85; overflow-x: auto; }
 .explain .txt { font-family: Inter, system-ui, sans-serif; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
@@ -272,6 +281,9 @@ ul.issues li.error { background: var(--err-bg); color: var(--err); }
 .verdict { padding: 10px 14px; border-radius: 12px; font-family: var(--math); font-size: 16.5px; }
 .verdict.yes { background: var(--ok-bg); color: var(--ok); }
 .verdict.no { background: var(--err-bg); color: var(--err); }
+.verdict > b { font-family: Inter, system-ui, sans-serif; font-size: 13.5px; font-weight: 600; }
+.verdict { overflow-wrap: anywhere; }
+.verdict .nb { display: inline-block; max-width: 100%; }
 .verdict .txt { font-family: Inter, system-ui, sans-serif; font-size: 12.5px; margin-top: 4px; }
 table.steps { border-collapse: collapse; font-family: var(--math); font-size: 15.5px; width: 100%; }
 table.steps td, table.steps th { border-bottom: 1px solid var(--line-soft); padding: 4px 8px; text-align: left; }
@@ -405,7 +417,6 @@ textarea {
 .guide .dots { display: flex; gap: 6px; flex: 1; }
 .guide .dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--soft-2); transition: background .2s, width .2s; }
 .guide .dots i.on { background: var(--ink); width: 18px; border-radius: 4px; }
-.guide .noshow { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); padding: 0 22px; }
 
 /* guide animations (SVG) */
 .ga .gs { fill: var(--state-fill); stroke: var(--edge); stroke-width: 2; }
