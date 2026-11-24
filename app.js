@@ -880,8 +880,9 @@
 
   function exerciseHTML() {
     minis.clear();
+    if (ui.live && ui.live.role === 'host') return hostHTML();
     if (ui.exercise) return solveHTML(ui.exercise);
-    return EDITOR ? authorHTML() : codeHTML();
+    return EDITOR ? authorHTML() : joinHTML() + codeHTML();
   }
 
   /** Enter a code to start an exercise. */
@@ -904,7 +905,9 @@
   function solveHTML(ex) {
     const req = M.requiredType(ex);
     const target = M.exerciseTarget(ex);
-    let h = `<div class="card"><div class="lab"><span>${esc(ex.title || KIND_LABEL[ex.kind])}</span>${ex.code ? `<span class="pill">${esc(ex.code)}</span>` : ''}</div>
+    const live = ui.live && ui.live.role === 'player'
+      ? `<div class="live-strip"><span>Live session ${esc(ui.live.code)} · ${esc(ui.live.name)}</span><span class="live-timer">${timerText()}</span></div>` : '';
+    let h = live + `<div class="card"><div class="lab"><span>${esc(ex.title || KIND_LABEL[ex.kind])}</span>${ex.code ? `<span class="pill">${esc(ex.code)}</span>` : ''}</div>
       <p class="ex-text">${esc(ex.text)}</p>
       <div class="row-pills"><span class="pill">${req === 'any' ? 'FA or NFA' : req}</span>${ex.maxStates ? `<span class="pill">at most ${ex.maxStates} states</span>` : ''}<span class="pill">Σ = {${target.alphabet.map(esc).join(', ')}}</span></div>
     </div>`;
@@ -943,6 +946,7 @@
       for (const e of exList) {
         h += `<div class="list-row static"><div class="lr-main"><b>${esc(e.code)}</b><span>${esc(e.exercise.title || KIND_LABEL[e.exercise.kind])}</span></div>
           <button type="button" class="btn sm" data-try="${esc(e.code)}">Try</button>
+          <button type="button" class="btn sm" data-live="${esc(e.code)}" title="Use this exercise in a live session in class">Live</button>
           <button type="button" class="icon-btn" data-remove="${esc(e.code)}" title="Remove ${esc(e.code)} from exercises.js" aria-label="Remove ${esc(e.code)}">${TRASH}</button></div>`;
       }
       h += `</div>`;
@@ -974,6 +978,7 @@
       <input type="text" id="d-title" class="plain-input title-input" value="${esc(d.title || '')}" placeholder="Short title, e.g. Sheet 5 — product construction" autocomplete="off">
       <textarea id="d-text" rows="4" placeholder="${esc(defaultText(d))}">${esc(d.text)}</textarea>
       <div class="sim-ctrl"><button type="button" class="btn" data-action="preview">Try it yourself</button>
+      <button type="button" class="btn" data-action="livestart" title="Use this exercise right away in a live session in class">Live session</button>
       <button type="button" class="btn dark grow" data-action="savefile">Save to exercises.js</button></div>
       <div class="small muted">Alternatively <button type="button" class="linkish" data-action="copylink">copy a direct link</button> (works without uploading anything).</div></div>`;
     return h;
@@ -1033,11 +1038,230 @@
   }
 
   function leaveExercise() {
+    if (ui.live && ui.live.role === 'player') liveStop();
     ui.exercise = null; ui.exId = null; ui.exResult = null; ui.mode = 'select';
     try { localStorage.removeItem(CURRENT_EX_KEY); } catch (e) { /* ignore */ }
     let B = null;
     try { const s = localStorage.getItem(STORAGE_KEY); if (s) B = JSON.parse(s); } catch (e) { B = null; }
     load(B || M.EXAMPLES[0].automaton, { resetHistory: true });
+  }
+
+  // ---------- live sessions (class mode) ----------
+  // ui.live = { role: 'host' | 'player', code, meta, players, unsubs, … } while a session is running.
+  let liveTimer = null;
+
+  function liveStop() {
+    if (ui.live) for (const u of ui.live.unsubs || []) try { u(); } catch (e) { /* ignore */ }
+    if (ui.live && ui.live.role === 'player') { try { sessionStorage.removeItem(LIVE_JOIN_KEY); } catch (e) { /* ignore */ } }
+    ui.live = null;
+    clearInterval(liveTimer); liveTimer = null;
+    $('#projector').hidden = true;
+  }
+
+  function liveTick() {
+    clearInterval(liveTimer);
+    liveTimer = setInterval(() => {
+      if (!ui.live) return;
+      const t = timerText();
+      $$('.live-timer').forEach(el => { el.textContent = t; el.classList.toggle('over', ui.live.meta && ui.live.meta.endsAt && Date.now() >= ui.live.meta.endsAt); });
+    }, 500);
+  }
+
+  function timerText() {
+    const m = ui.live && ui.live.meta;
+    if (!m || !m.endsAt) return '';
+    const s = Math.max(0, Math.round((m.endsAt - Date.now()) / 1000));
+    return s === 0 ? 'Time is up' : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  function appAddress() { return location.host + location.pathname.replace(/index\.html$/, ''); }
+  function joinURL(code) { return location.origin + location.pathname.replace(/index\.html$/, '') + '#live=' + code; }
+
+  /** Editor: open a session for an exercise. */
+  async function liveStart(ex) {
+    const b = Live.get();
+    try {
+      await b.init();
+      const code = await Live.newCode(b);
+      const clean = Object.assign({}, ex); delete clean.code;
+      await b.create(code, { open: true, title: ex.title || KIND_LABEL[ex.kind], createdAt: Date.now(), endsAt: 0 }, clean);
+      liveHost(code, { open: true, endsAt: 0, title: ex.title || KIND_LABEL[ex.kind] });
+    } catch (e) { toast('Could not start the live session: ' + e.message, true); }
+  }
+
+  const LIVE_HOST_KEY = 'automata-lab:live-host';   // the editor's running session survives a reload
+
+  function liveHost(code, meta) {
+    const b = Live.get();
+    liveStop();
+    try { localStorage.setItem(LIVE_HOST_KEY, code); } catch (e) { /* ignore */ }
+    ui.live = { role: 'host', code, meta, players: {}, unsubs: [], showNames: false };
+    ui.live.unsubs.push(b.watchMeta(code, m => { if (ui.live && ui.live.code === code && m) { ui.live.meta = m; liveRefresh(); } }));
+    ui.live.unsubs.push(b.watchPlayers(code, p => { if (ui.live && ui.live.code === code) { ui.live.players = p || {}; liveRefresh(); } }));
+    liveTick();
+    ui.tab = 'exercise';
+    renderAll();
+  }
+
+  /** After a reload: back into the running session (editor) or rejoin it (participant). */
+  async function liveResume() {
+    let host = null, join = null;
+    try { host = EDITOR ? localStorage.getItem(LIVE_HOST_KEY) : null; } catch (e) { host = null; }
+    try { join = !EDITOR ? JSON.parse(sessionStorage.getItem(LIVE_JOIN_KEY)) : null; } catch (e) { join = null; }
+    if (!host && !join) return;
+    const b = Live.get();
+    try {
+      await b.init();
+      if (host) {
+        const meta = await b.getMeta(host);
+        if (meta && meta.open && meta.owner === b.uid()) liveHost(host, meta);
+        else localStorage.removeItem(LIVE_HOST_KEY);
+      } else if (join) {
+        await liveJoin(join);
+      }
+    } catch (e) { /* offline or session gone: nothing to resume */ }
+  }
+
+  async function liveEnd() {
+    if (!ui.live || ui.live.role !== 'host') return;
+    if (!window.confirm('End the live session? The results are deleted and nobody can join any more.')) return;
+    const code = ui.live.code;
+    liveStop();
+    try { localStorage.removeItem(LIVE_HOST_KEY); } catch (e) { /* ignore */ }
+    try { await Live.get().end(code); } catch (e) { /* already gone */ }
+    renderAll();
+  }
+
+  async function liveSetTimer(minutes) {
+    if (!ui.live || ui.live.role !== 'host') return;
+    const m = ui.live.meta;
+    let endsAt = 0;
+    if (minutes === 'add') endsAt = Math.max(Date.now(), m.endsAt || Date.now()) + 60000;
+    else if (minutes > 0) endsAt = Date.now() + minutes * 60000;
+    ui.live.meta = Object.assign({}, m, { endsAt });
+    renderPanel(); renderProjector();
+    try { await Live.get().setMeta(ui.live.code, { endsAt }); } catch (e) { toast(e.message, true); }
+  }
+
+  /** Participant: join with a session code and a name. */
+  const LIVE_JOIN_KEY = 'automata-lab:live-join';   // sessionStorage: rejoin after a reload of the page
+
+  async function liveJoin(rejoin) {
+    const code = rejoin ? rejoin.code : (ui.liveCodeInput || '').replace(/\D/g, '');
+    const name = rejoin ? rejoin.name : (ui.liveNameInput || '').trim().slice(0, 30);
+    if (code.length !== 4) { ui.liveError = 'A session code has 4 digits.'; renderPanel(); return; }
+    if (!name) { ui.liveError = 'Choose a name (a nickname is fine).'; renderPanel(); return; }
+    ui.liveError = null; ui.liveBusy = true; renderPanel();
+    const b = Live.get();
+    try {
+      await b.init();
+      const meta = await b.getMeta(code);
+      if (!meta || !meta.open) throw new Error(`There is no open live session with the code ${code}.`);
+      const ex = M.normalizeExercise(await b.getExercise(code));
+      const before = await b.getPlayer(code);            // joining again (e.g. after a reload): keep the progress
+      if (before) await b.setPlayer(code, { name });
+      else await b.setPlayer(code, { name, joinedAt: Date.now(), attempts: 0, solved: false });
+      try { localStorage.setItem('automata-lab:live-name', name); } catch (e) { /* ignore */ }
+      try { sessionStorage.setItem(LIVE_JOIN_KEY, JSON.stringify({ code, name })); } catch (e) { /* ignore */ }
+      ui.liveBusy = false;
+      liveStop();
+      ui.live = { role: 'player', code, name, meta, attempts: (before && before.attempts) || 0, solved: !!(before && before.solved), unsubs: [] };
+      ui.live.unsubs.push(b.watchMeta(code, m => {
+        if (!ui.live || ui.live.code !== code) return;
+        if (!m || !m.open) { liveStop(); toast('The live session has ended. You can keep working on the exercise.'); renderAll(); return; }
+        ui.live.meta = m; renderPanel();
+      }));
+      liveTick();
+      enterExercise(ex);
+    } catch (e) {
+      ui.liveBusy = false;
+      try { sessionStorage.removeItem(LIVE_JOIN_KEY); } catch (err) { /* ignore */ }
+      if (rejoin) { toast('The live session is no longer open.'); return; }
+      ui.liveError = e.message;
+      renderPanel();
+    }
+  }
+
+  /** Participant: send the result of a check (never the automaton). */
+  function liveReport(result) {
+    if (!ui.live || ui.live.role !== 'player') return;
+    const L = ui.live;
+    L.attempts++;
+    const patch = { attempts: L.attempts, lastCheck: Date.now() };
+    if (result.ok && !L.solved) { L.solved = true; patch.solved = true; patch.solvedAt = Date.now(); }
+    Live.get().setPlayer(L.code, patch).catch(() => { /* session closed meanwhile */ });
+  }
+
+  function liveStats() {
+    const ps = Object.values((ui.live && ui.live.players) || {});
+    const solved = ps.filter(p => p.solved).length;
+    return { joined: ps.length, solved, working: ps.length - solved, ps };
+  }
+
+  function liveRefresh() {
+    if (ui.tab === 'exercise') renderPanel();
+    renderProjector();
+  }
+
+  /** Editor: dashboard of the running session. */
+  function hostHTML() {
+    const L = ui.live, st = liveStats();
+    const pct = st.joined ? Math.round(100 * st.solved / st.joined) : 0;
+    let h = `<div class="card live-card"><div class="lab"><span>Live session</span>${Live.isTestMode() ? '<span class="pill" title="No Firebase project configured yet: works only between tabs of this browser">test mode</span>' : '<span class="pill ok">live</span>'}</div>
+      <div class="live-title">${esc(L.meta.title || '')}</div>
+      <div class="live-code">${esc(L.code)}</div>
+      <div class="muted small">Join: open the app → <b>Exercise</b> → <b>Join a live session</b>, or <span class="mono">${esc(joinURL(L.code))}</span></div>
+      <div class="live-timer-row"><span class="live-timer">${timerText()}</span>
+        <span class="row-btns">${L.meta.endsAt ? '<button type="button" class="btn sm" data-livetimer="add">+1 min</button><button type="button" class="btn sm text" data-livetimer="0">Stop timer</button>'
+          : [3, 5, 10].map(m => `<button type="button" class="btn sm" data-livetimer="${m}">${m} min</button>`).join('')}</span></div>
+      <div class="live-stats">
+        <div><b>${st.joined}</b><span>joined</span></div>
+        <div class="ok"><b>${st.solved}</b><span>solved</span></div>
+        <div><b>${st.working}</b><span>working</span></div>
+      </div>
+      <div class="bar"><i style="width:${pct}%"></i></div>
+      <div class="sim-ctrl"><button type="button" class="btn" data-action="liveproject">Show on screen</button>
+        <button type="button" class="btn grow" data-action="liveend">End session</button></div>
+    </div>`;
+    h += `<div class="card"><div class="lab"><span>Participants</span><button type="button" class="btn sm text" data-action="livenames">${L.showNames ? 'Hide names' : 'Show names'}</button></div>`;
+    if (!st.joined) h += `<div class="muted small">Nobody has joined yet.</div>`;
+    else if (!L.showNames) h += `<div class="muted small">Names are hidden (handy while the screen is projected).</div>`;
+    else {
+      const ps = st.ps.slice().sort((a, b) => (b.solved - a.solved) || ((a.solvedAt || 0) - (b.solvedAt || 0)) || String(a.name).localeCompare(b.name));
+      h += `<div class="list">` + ps.map(p => `<div class="list-row static"><div class="lr-main"><b>${esc(p.name)}</b><span>${p.attempts || 0} check${p.attempts === 1 ? '' : 's'}</span></div>
+        ${p.solved ? '<span class="pill ok">solved</span>' : '<span class="pill">working</span>'}</div>`).join('') + `</div>`;
+    }
+    h += `</div><div class="muted small">Only the result of each check is sent — never the automaton. Ending the session deletes everything.</div>`;
+    return h;
+  }
+
+  /** Big view for the projector: code, timer, progress — no names. */
+  function renderProjector() {
+    const box = $('#projector');
+    if (!ui.live || ui.live.role !== 'host' || !ui.live.projecting) { box.hidden = true; box.innerHTML = ''; return; }
+    const L = ui.live, st = liveStats();
+    const pct = st.joined ? Math.round(100 * st.solved / st.joined) : 0;
+    box.hidden = false;
+    box.innerHTML = `<div class="proj">
+      <button type="button" class="btn sm proj-close" data-action="liveproject">Close</button>
+      <div class="proj-title">${esc(L.meta.title || '')}</div>
+      <div class="proj-join">Open <b>${esc(appAddress())}</b> → Exercise → Join a live session</div>
+      <div class="proj-code">${esc(L.code)}</div>
+      <div class="live-timer proj-timer">${timerText()}</div>
+      <div class="proj-stats"><span><b>${st.solved}</b> of <b>${st.joined}</b> solved</span></div>
+      <div class="bar big"><i style="width:${pct}%"></i></div>
+    </div>`;
+  }
+
+  /** Participant: the "Join a live session" card. */
+  function joinHTML() {
+    if (ui.liveNameInput === undefined) { try { ui.liveNameInput = localStorage.getItem('automata-lab:live-name') || ''; } catch (e) { ui.liveNameInput = ''; } }
+    return `<div class="card"><div class="lab">Join a live session</div>
+      <div class="muted small">Enter the 4-digit session code shown in class and a name of your choice — a nickname is fine.</div>
+      <div class="sim-ctrl"><input type="text" id="live-code" class="code-input live-code-input" inputmode="numeric" maxlength="4" value="${esc(ui.liveCodeInput || '')}" placeholder="0000" autocomplete="off" aria-label="Session code">
+        <input type="text" id="live-name" class="plain-input title-input" maxlength="30" value="${esc(ui.liveNameInput || '')}" placeholder="Your name" autocomplete="off" aria-label="Your name"></div>
+      <button type="button" class="btn dark wide" data-action="livejoin" ${ui.liveBusy ? 'disabled' : ''}>${ui.liveBusy ? 'Joining…' : 'Join'}</button>
+      ${ui.liveError ? `<div class="code-err">${esc(ui.liveError)}</div>` : ''}</div>`;
   }
 
   function exerciseLink(ex) { return location.href.split('#')[0] + '#x=' + encode(ex); }
@@ -1126,6 +1350,8 @@
     if (e.target.id === 'd-code') { ui.draft.code = e.target.value; return; }
     if (e.target.id === 'd-title') { ui.draft.title = e.target.value; return; }
     if (e.target.id === 'ex-code') { ui.codeInput = e.target.value; return; }
+    if (e.target.id === 'live-code') { ui.liveCodeInput = e.target.value; return; }
+    if (e.target.id === 'live-name') { ui.liveNameInput = e.target.value; return; }
     if (e.target.id === 'd-max') { ui.draft.maxStates = e.target.value; return; }
     if (e.target.id === 'sim-word') { ui.simWord = e.target.value; ui.simStep = 0; renderPanel(); renderGraph(); }
     if (e.target.id === 'sim-batch') { ui.batch = e.target.value; renderPanel(); }
@@ -1133,14 +1359,20 @@
   body.addEventListener('keydown', e => {
     if (e.key === 'Enter' && e.target.id === 'sim-word') { e.preventDefault(); simAction('step'); }
     if (e.key === 'Enter' && e.target.id === 'ex-code') { e.preventDefault(); openByCode(e.target.value); }
+    if (e.key === 'Enter' && (e.target.id === 'live-code' || e.target.id === 'live-name')) { e.preventDefault(); liveJoin(); }
     if (e.key === 'Enter' && e.target.id === 'sigma') e.target.blur();
   });
   body.addEventListener('scroll', () => { if (ui.pop && ui.pop.type === 'cell') { ui.pop = null; hidePop(); $$('.cell.open').forEach(b => b.classList.remove('open')); } });
   body.addEventListener('click', async e => {
-    const x = e.target.closest('[data-recent],[data-try],[data-remove],[data-dkind],[data-dreq],[data-dop],[data-slot]');
+    const x = e.target.closest('[data-recent],[data-try],[data-live],[data-livetimer],[data-remove],[data-dkind],[data-dreq],[data-dop],[data-slot]');
     if (x) {
       const d = ui.draft;
       if (x.dataset.recent !== undefined) openByCode(x.dataset.recent);
+      else if (x.dataset.live !== undefined) {
+        const item = exList.find(i => i.code === x.dataset.live);
+        if (item) liveStart(M.normalizeExercise(Object.assign({}, item.exercise, { code: item.code })));
+      }
+      else if (x.dataset.livetimer !== undefined) liveSetTimer(x.dataset.livetimer === 'add' ? 'add' : +x.dataset.livetimer);
       else if (x.dataset.try !== undefined) {
         const item = exList.find(i => i.code === x.dataset.try);
         if (item) { enterExercise(M.normalizeExercise(Object.assign({}, item.exercise, { code: item.code }))); toast('This is how the exercise looks when it is opened. “Leave exercise” brings you back.'); }
@@ -1162,8 +1394,18 @@
       return;
     }
     const act = e.target.closest('[data-action]');
-    if (act && ['check', 'preview', 'copylink', 'savefile', 'opencode', 'restart', 'leave'].includes(act.dataset.action)) {
+    if (act && ['check', 'preview', 'copylink', 'savefile', 'opencode', 'restart', 'leave', 'livestart', 'livejoin', 'liveend', 'liveproject', 'livenames'].includes(act.dataset.action)) {
       const a = act.dataset.action;
+      if (a === 'livejoin') { liveJoin(); return; }
+      if (a === 'liveend') { liveEnd(); return; }
+      if (a === 'liveproject') { ui.live.projecting = !ui.live.projecting; renderProjector(); return; }
+      if (a === 'livenames') { ui.live.showNames = !ui.live.showNames; renderPanel(); return; }
+      if (a === 'livestart') {
+        let ex;
+        try { ex = buildExercise(); } catch (err) { toast(err.message, true); return; }
+        liveStart(ex);
+        return;
+      }
       if (a === 'opencode') { openByCode(ui.codeInput); return; }
       if (a === 'savefile') {
         const d = ui.draft;
@@ -1179,7 +1421,7 @@
         }
         return;
       }
-      if (a === 'check') { ui.exResult = M.checkExercise(ui.exercise, A); renderPanel(); }
+      if (a === 'check') { ui.exResult = M.checkExercise(ui.exercise, A); liveReport(ui.exResult); renderPanel(); }
       else if (a === 'leave') leaveExercise();
       else if (a === 'restart') { ui.selected = null; ui.pop = null; ui.mode = 'state'; ui.fitNext = true; commit(freshAnswer(ui.exercise)); }
       else {
@@ -1251,11 +1493,16 @@
   window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { renderGraph(); renderPop(); }, 80); });
 
   // ---------- start ----------
+  $('#projector').addEventListener('click', e => {
+    if (e.target.closest('[data-action=liveproject]') && ui.live) { ui.live.projecting = false; renderProjector(); }
+  });
+
   // a link pasted while the app is already open only changes the part after # (no reload)
   window.addEventListener('hashchange', () => {
     const h = location.hash;
     try {
-      if (h.startsWith('#code=')) { openByCode(decodeURIComponent(h.slice(6))); }
+      if (h.startsWith('#live=')) { ui.liveCodeInput = h.slice(6).replace(/\D/g, ''); ui.tab = 'exercise'; renderAll(); }
+      else if (h.startsWith('#code=')) { openByCode(decodeURIComponent(h.slice(6))); }
       else if (h.startsWith('#x=')) { enterExercise(M.normalizeExercise(decode(h.slice(3)))); }
       else if (h.startsWith('#m=')) { if (ui.exercise) leaveExercise(); load(decode(h.slice(3))); toast('Automaton loaded from the link.'); }
       else return;
@@ -1269,6 +1516,17 @@
     if (location.hash.startsWith('#m=')) {
       try { initial = decode(location.hash.slice(3)); fromLink = true; } catch (e) { toast('The link does not contain a valid automaton.', true); }
       history.replaceState(null, '', location.pathname + location.search);
+    } else if (location.hash.startsWith('#live=')) {
+      // a link like …/#live=4821 opens the "Join a live session" form with the code filled in
+      ui.liveCodeInput = location.hash.slice(6).replace(/\D/g, '');
+      history.replaceState(null, '', location.pathname + location.search);
+      try { localStorage.removeItem(CURRENT_EX_KEY); } catch (e) { /* ignore */ }
+      let B = null;
+      try { const s = localStorage.getItem(STORAGE_KEY); if (s) B = JSON.parse(s); } catch (e) { B = null; }
+      load(B || M.EXAMPLES[0].automaton, { resetHistory: true });
+      ui.tab = 'exercise'; renderAll();
+      Guide.init();
+      return;
     } else if (location.hash.startsWith('#code=')) {
       // a link like …/index.html#code=S05-1 opens that exercise directly
       const code = decodeURIComponent(location.hash.slice(6));
@@ -1283,7 +1541,7 @@
     } else {
       try { const s = localStorage.getItem(CURRENT_EX_KEY); if (s) exercise = M.normalizeExercise(JSON.parse(s)); } catch (e) { exercise = null; }
     }
-    if (exercise) { enterExercise(exercise); Guide.init(); return; }
+    if (exercise) { enterExercise(exercise); Guide.init(); liveResume(); return; }
     if (!initial) {
       try { const s = localStorage.getItem(STORAGE_KEY); if (s) initial = JSON.parse(s); } catch (e) { /* ignore */ }
     }
@@ -1291,6 +1549,7 @@
     catch (e) { load(M.EXAMPLES[0].automaton, { resetHistory: true }); }
     if (fromLink) toast('Automaton loaded from the link.');
     Guide.init();
+    liveResume();
   }
   start();
 })();

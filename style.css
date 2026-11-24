@@ -356,6 +356,38 @@ textarea {
 .list-row .icon-btn:hover { background: var(--err-bg); color: var(--err); }
 #type-seg button:disabled { opacity: .35; cursor: not-allowed; }
 
+/* ---------- live sessions ---------- */
+.live-card { border-color: var(--accent); }
+.live-title { font-weight: 600; font-size: 15px; }
+.live-code { font-size: 44px; font-weight: 700; letter-spacing: .14em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; }
+.live-timer-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.live-timer { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.live-timer.over { color: var(--err); }
+.row-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.live-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.live-stats > div { background: var(--soft); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; }
+.live-stats b { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.live-stats span { font-size: 12px; color: var(--muted); }
+.live-stats .ok { background: var(--ok-bg); }
+.live-stats .ok b, .live-stats .ok span { color: var(--ok); }
+.bar { height: 8px; border-radius: 8px; background: var(--soft-2); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--ok-c); border-radius: 8px; transition: width .4s; }
+.bar.big { height: 22px; border-radius: 12px; }
+.live-strip { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 12px; background: var(--accent-soft); color: var(--accent); font-size: 13px; font-weight: 500; }
+.live-strip .live-timer { font-size: 16px; color: inherit; }
+.live-code-input { flex: 0 0 96px; text-align: center; }
+.projector { position: fixed; inset: 0; z-index: 70; background: var(--bg); display: flex; align-items: center; justify-content: center; padding: 24px; }
+.proj { width: min(900px, 100%); display: flex; flex-direction: column; align-items: center; gap: 18px; text-align: center; position: relative; }
+.proj-close { position: fixed; top: 16px; right: 16px; }
+.proj-title { font-size: 26px; font-weight: 600; }
+.proj-join { font-size: 20px; color: var(--text-2); }
+.proj-code { font-size: clamp(80px, 16vw, 180px); font-weight: 700; letter-spacing: .12em; line-height: 1; font-variant-numeric: tabular-nums; }
+.proj-timer { font-size: clamp(36px, 6vw, 64px); }
+.proj-stats { font-size: 28px; color: var(--text-2); }
+.proj-stats b { color: var(--ink); }
+.proj .bar { width: 100%; }
+
 /* ---------- welcome guide ---------- */
 .scrim { position: fixed; inset: 0; z-index: 50; background: var(--scrim); display: flex; align-items: safe center; justify-content: center; padding: 16px; overflow: auto; animation: fade .2s ease-out; }
 @media (max-height: 620px) { .guide .stage-art { height: 160px; } .guide .gbody { min-height: 0; } }
