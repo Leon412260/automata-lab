@@ -44,8 +44,8 @@
       </svg>`,
     },
     {
-      title: 'Simulate a word',
-      text: 'In <b>Simulation</b>, type a word and press <b>Step</b>. You see every configuration (<i>q</i>, <i>w</i>) ⊢ (<i>p</i>, <i>w′</i>), the states that are active, and why the word is accepted or rejected.',
+      title: 'Run a word',
+      text: 'In <b>Run</b>, type a word and press <b>Step</b>. You see every configuration (<i>q</i>, <i>w</i>) ⊢ (<i>p</i>, <i>w′</i>), the states that are active, and why the word is accepted or rejected.',
       // same look as the real simulation: active state and arrow in blue, tape with read / next symbol,
       // the computation as configurations and the verdict — stepped by a timer (see animateSim)
       sim: true,
@@ -68,7 +68,7 @@
     },
     {
       title: 'Classes of states Kl[q]',
-      text: '<b>Classes</b> shows which words lead to which state: <span style="white-space:nowrap">Kl[<i>q</i>] = { <i>w</i> ∈ Σ* | δ̂(<i>q</i><sub>0</sub>, <i>w</i>) = <i>q</i> }</span>. Hover a class to find its words, click a word to simulate it.',
+      text: '<b>Classes</b> shows which words lead to which state: <span style="white-space:nowrap">Kl[<i>q</i>] = { <i>w</i> ∈ Σ* | δ̂(<i>q</i><sub>0</sub>, <i>w</i>) = <i>q</i> }</span>. Hover a class to find its words, click a word to run it.',
       art: () => {
         const C = ['#4E79A7', '#F28E2B', '#59A14F'];
         const nodes = [[200, 32, 0], [120, 92, 1], [280, 92, 0], [80, 160, 2], [160, 160, 1], [240, 160, 1], [320, 160, 0]];

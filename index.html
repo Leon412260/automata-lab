@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Automata Lab</title>
-<meta name="description" content="Build, simulate and understand finite automata (FA) and nondeterministic finite automata (NFA).">
+<meta name="description" content="Build, run and understand finite automata.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 <script>
   // day/night: the saved choice, otherwise the system setting (set before the page is drawn, so it never flashes)
   try {
@@ -25,7 +25,7 @@
     <h1>Automata Lab</h1>
     <span class="pill" id="editor-pill" hidden title="Exercise editor: create exercises in the Exercise tab">Editor</span>
   </div>
-  <div class="seg" id="type-seg" role="radiogroup" aria-label="Automaton type">
+  <div class="seg" id="type-seg" hidden role="radiogroup" aria-label="Automaton type">
     <button type="button" data-type="FA" role="radio" title="Finite automaton — δ: Q × Σ → Q">FA</button>
     <button type="button" data-type="NFA" role="radio" title="Nondeterministic finite automaton — δ: Q × Σ → 𝒫(Q)">NFA</button>
   </div>
@@ -76,7 +76,7 @@
   <aside class="panel">
     <div class="ptabs-wrap"><div class="seg ptabs" role="tablist">
       <button type="button" role="tab" data-tab="definition">Definition</button>
-      <button type="button" role="tab" data-tab="simulation">Simulation</button>
+      <button type="button" role="tab" data-tab="simulation">Run</button>
       <button type="button" role="tab" data-tab="classes">Classes</button>
       <button type="button" role="tab" data-tab="exercise">Exercise</button>
     </div></div>
@@ -91,11 +91,12 @@
 
 <!-- raise every ?v= number at each release, so browsers never mix old and new files -->
 <!-- all files sit next to index.html (no subfolders), so uploading to GitHub is just "select all files" -->
-<script src="core.js?v=3"></script>
-<script src="graph.js?v=3"></script>
-<script src="guide.js?v=3"></script>
-<script src="live-config.js?v=3"></script>
-<script src="live.js?v=3"></script>
-<script src="app.js?v=3"></script>
+<script src="stage.js?v=4"></script>
+<script src="core.js?v=4"></script>
+<script src="graph.js?v=4"></script>
+<script src="guide.js?v=4"></script>
+<script src="live-config.js?v=4"></script>
+<script src="live.js?v=4"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

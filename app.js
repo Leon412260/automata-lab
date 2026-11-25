@@ -5,6 +5,7 @@
   const STORAGE_KEY = 'automata-lab:v1';
   // the exercise editor is the same app opened as index.html?mode=editor (see the editor/ folder)
   const EDITOR = new URLSearchParams(location.search).get('mode') === 'editor';
+  const STAGE = EDITOR || Number(window.AUTOMATA_LAB_STAGE) >= 2 ? 2 : 1;   // see stage.js; if in doubt: stage 1
   const $ = s => document.querySelector(s);
   const $$ = s => Array.from(document.querySelectorAll(s));
 
@@ -27,6 +28,15 @@
   const DH = '<span class="dh">δ̂</span>';
   const TURN = ' ⊢<sub>M</sub> ';
   const TRASH = '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>';
+
+  // ---------- stages ----------
+  /** NFAs can be used: unlocked, or asked for by the exercise of a live session. */
+  function nfaOn() { return STAGE >= 2 || !!(ui.exercise && M.requiredType(ui.exercise) === 'NFA'); }
+  /** The type the answer must have; "either" means FA as long as NFAs are locked. */
+  function answerType(ex) { const r = M.requiredType(ex); return r === 'any' && STAGE < 2 ? 'FA' : r; }
+  const LOCKED = 'This link is not available yet.';
+  /** An automaton / exercise from a link, if it is unlocked. */
+  function checkStage(stage) { if (stage > STAGE) throw new Error(LOCKED); }
 
   // ---------- state ----------
   let A = M.empty('FA');
@@ -142,7 +152,7 @@
     const B = M.autoLayout(M.normalize(obj));
     ui.selected = null; ui.pop = null; ui.simWord = ''; ui.simStep = 0; ui.batch = ''; ui.fitNext = true;
     if (B.type === 'NFA' && ui.tab === 'classes') ui.tab = 'definition';
-    if (resetHistory) { undoStack = []; redoStack = []; A = B; save(); renderAll(); }
+    if (resetHistory) { undoStack = []; redoStack = []; A = B; if (!keepSaved) save(); renderAll(); }
     else if (keepSaved) { undoStack.push(JSON.stringify(A)); redoStack = []; A = B; renderAll(); }
     else commit(B);
   }
@@ -156,10 +166,19 @@
     toastTimer = setTimeout(() => { t.className = 'toast' + (isError ? ' error' : ''); }, isError ? 4200 : 2400);
   }
 
-  /** The automaton you were working on (outside exercises), or null. */
+  /** The automaton you were working on (outside exercises), or null (also if it is still locked). */
   function ownAutomaton() {
-    try { const s = localStorage.getItem(STORAGE_KEY); if (s) return M.normalize(JSON.parse(s)); } catch (e) { /* ignore */ }
+    try {
+      const s = localStorage.getItem(STORAGE_KEY);
+      if (s) { const B = M.normalize(JSON.parse(s)); if (M.automatonStage(B) <= STAGE) return B; }
+    } catch (e) { /* ignore */ }
     return null;
+  }
+  /** Back to your own automaton; otherwise the first example (which does not replace anything saved). */
+  function loadOwn() {
+    const own = ownAutomaton();
+    load(own || M.EXAMPLES[0].automaton, { resetHistory: true, keepSaved: !own });
+    return own;
   }
 
   /** The point p, moved as little as needed so that a state there does not overlap another one (except q). */
@@ -216,7 +235,8 @@
     $$('#type-seg button').forEach(b => b.setAttribute('aria-checked', String(b.dataset.type === A.type)));
     $$('.tools [data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === ui.mode)));
     if (A.type === 'NFA' && ui.tab === 'classes') ui.tab = 'definition';
-    const req = ui.exercise ? M.requiredType(ui.exercise) : 'any';
+    const req = ui.exercise ? answerType(ui.exercise) : 'any';
+    $('#type-seg').hidden = !nfaOn();
     $$('#type-seg button').forEach(b => { b.disabled = req !== 'any' && b.dataset.type !== req; });
     $('#ex-chip').hidden = !ui.exercise;
     $('#btn-examples').hidden = !!ui.exercise;
@@ -320,7 +340,7 @@
       html = cellPopHTML(ui.pop.q, ui.pop.a);
     } else if (ui.pop.type === 'menu') {
       anchor = $('#btn-examples').getBoundingClientRect();
-      html = M.EXAMPLES.map((ex, i) => `<button type="button" data-example="${i}"><b>${esc(ex.title)}</b><span>${esc(ex.subtitle || '')}</span></button>`).join('');
+      html = M.EXAMPLES.map((ex, i) => M.automatonStage(ex.automaton) > STAGE ? '' : `<button type="button" data-example="${i}"><b>${esc(ex.title)}</b><span>${esc(ex.subtitle || '')}</span></button>`).join('');
     }
     if (!anchor) return hidePop();
     const focused = document.activeElement && pop.contains(document.activeElement) ? document.activeElement.id : null;
@@ -575,7 +595,7 @@
     return h;
   }
 
-  // ---------- Simulation tab ----------
+  // ---------- Run tab (one word) ----------
   function simulationHTML() {
     const s = simulation();
     ui.simStep = s.step;
@@ -731,7 +751,7 @@
         h += `<div class="meta">Not reachable from ${st(A.initial)}, so Kl[${st(q)}] = ∅.</div>`;
       } else {
         const LIMIT = 60;
-        h += `<div class="chips">` + words.slice(0, LIMIT).map(w => `<span class="chip" data-word="${esc(w.join(''))}" title="Simulate this word">${w.length ? esc(w.join('')) : 'λ'}</span>`).join('');
+        h += `<div class="chips">` + words.slice(0, LIMIT).map(w => `<span class="chip" data-word="${esc(w.join(''))}" title="Run this word">${w.length ? esc(w.join('')) : 'λ'}</span>`).join('');
         if (words.length > LIMIT) h += `<span class="muted small">… +${words.length - LIMIT}</span>`;
         if (!words.length) h += `<span class="muted small">none of length ≤ ${n} — shortest: ${wd(shortest)}</span>`;
         h += `</div>`;
@@ -779,7 +799,7 @@
         <text text-anchor="middle" dominant-baseline="central">${esc(label[0])}${label[1] ? `<tspan class="sub" dy="0.3em">${esc(label[1])}</tspan>` : ''}</text></g>`;
     });
     return `<div class="tree-wrap" data-root="${W / 2}"><svg class="${ui.hoverState ? 'tree-focus' : ''}" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${g}</svg></div>
-      <div class="legend">Each node is the word on the path from the root, coloured by its class. Click a node to simulate it.</div>`;
+      <div class="legend">Each node is the word on the path from the root, coloured by its class. Click a node to run its word.</div>`;
   }
 
   // ---------- Exercise tab ----------
@@ -837,7 +857,7 @@
   function rememberRecent(ex) {
     if (!ex.code) return;
     const list = recentExercises().filter(r => r.code !== ex.code);
-    list.unshift({ code: ex.code, title: ex.title || KIND_LABEL[ex.kind] });
+    list.unshift({ code: ex.code, title: ex.title || KIND_LABEL[ex.kind], stage: M.exerciseStage(ex) });
     try { localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, 8))); } catch (e) { /* ignore */ }
   }
 
@@ -857,7 +877,7 @@
     ui.codeError = null; ui.codeBusy = true; renderPanel();
     const list = await loadExerciseList();
     ui.codeBusy = false;
-    const item = list.find(e => M.normalizeCode(e.code) === code);
+    const item = list.find(e => M.normalizeCode(e.code) === code && M.exerciseStage(e.exercise) <= STAGE);   // locked = not there yet
     if (!item) { ui.codeError = `There is no exercise with the code ${code}. Check for a typo.`; renderPanel(); return; }
     let ex;
     try { ex = M.normalizeExercise(Object.assign({}, item.exercise, { code })); }
@@ -955,7 +975,7 @@
         <button type="button" class="btn dark" data-action="opencode" ${busy ? 'disabled' : ''}>${busy ? (live ? 'Joining…' : 'Loading…') : live ? 'Join' : 'Start'}</button></div>
       ${live ? `<input type="text" id="live-name" class="plain-input title-input" maxlength="30" value="${esc(ui.liveNameInput)}" placeholder="Your name — a nickname is fine" autocomplete="off" aria-label="Your name">` : ''}
       ${ui.codeError ? `<div class="code-err">${esc(ui.codeError)}</div>` : `<div class="muted small">${live ? 'A live session: choose a name and join.' : 'The code of an exercise, or the 4 digits of a live session.'}</div>`}</div>`;
-    const recent = recentExercises();
+    const recent = recentExercises().filter(r => (r.stage || 1) <= STAGE);
     if (recent.length) {
       h += `<div class="card"><div class="lab">Continue</div><div class="list">`;
       for (const r of recent) h += `<button type="button" class="list-row" data-recent="${esc(r.code)}"><b>${esc(r.title)}</b><span>${esc(r.code)}</span></button>`;
@@ -966,7 +986,7 @@
   }
 
   function solveHTML(ex) {
-    const req = M.requiredType(ex);
+    const req = answerType(ex);
     const target = M.exerciseTarget(ex);
     // only what the text does not say already
     const pills = [], text = ex.text.replace(/\s+/g, ' '), sigma = `{${target.alphabet.join(', ')}}`;
@@ -995,7 +1015,7 @@
           <div class="txt">${r.counterexample.answerAccepts
             ? `Your automaton accepts ${wd(w)}, but ${wd(w)} ∉ ${langName(ex)}.`
             : `Your automaton rejects ${wd(w)}, but ${wd(w)} ∈ ${langName(ex)}.`}</div></div>
-          <button type="button" class="btn sm" data-word="${esc(ws)}">Simulate ${wd(w)} on your automaton</button>`;
+          <button type="button" class="btn sm" data-word="${esc(ws)}">Run ${wd(w)} on your automaton</button>`;
       }
     }
     h += `</div><div class="ex-foot"><button type="button" class="btn sm text" data-action="restart">Start over</button></div>`;
@@ -1104,7 +1124,7 @@
   }
 
   function freshAnswer(ex) {
-    const B = M.empty(M.requiredType(ex) === 'NFA' ? 'NFA' : 'FA');
+    const B = M.empty(answerType(ex) === 'NFA' ? 'NFA' : 'FA');
     return M.setAlphabet(B, M.exerciseTarget(ex).alphabet);
   }
 
@@ -1112,7 +1132,7 @@
     if (ui.live && ui.live.role === 'player') liveStop();
     ui.exercise = null; ui.exId = null; ui.exResult = null; ui.mode = 'select';
     try { localStorage.removeItem(CURRENT_EX_KEY); } catch (e) { /* ignore */ }
-    load(ownAutomaton() || M.EXAMPLES[0].automaton, { resetHistory: true });
+    loadOwn();
   }
 
   // ---------- live sessions (class mode) ----------
@@ -1624,27 +1644,28 @@
     try {
       if (h.startsWith('#live=')) { if (ui.exercise) leaveExercise(); ui.codeInput = h.slice(6).replace(/\D/g, ''); ui.tab = 'exercise'; renderAll(); }
       else if (h.startsWith('#code=')) { ui.tab = 'exercise'; renderAll(); openByCode(decodeURIComponent(h.slice(6))); }
-      else if (h.startsWith('#x=')) { enterExercise(M.normalizeExercise(decode(h.slice(3)))); }
-      else if (h.startsWith('#m=')) { const B = M.normalize(decode(h.slice(3))); if (ui.exercise) leaveExercise(); load(B, { keepSaved: true }); toast('Automaton loaded from the link — Undo brings your own back.'); return; }
+      else if (h.startsWith('#x=')) { const ex = M.normalizeExercise(decode(h.slice(3))); checkStage(M.exerciseStage(ex)); enterExercise(ex); }
+      else if (h.startsWith('#m=')) { const B = M.normalize(decode(h.slice(3))); checkStage(M.automatonStage(B)); if (ui.exercise) leaveExercise(); load(B, { keepSaved: true }); toast('Automaton loaded from the link — Undo brings your own back.'); return; }
       else return;
-    } catch (e) { toast('The link is not valid.', true); }
+    } catch (e) { toast(e.message === LOCKED ? LOCKED : 'The link is not valid.', true); }
     history.replaceState(null, '', location.pathname + location.search);
   });
 
   function start() {
     if (EDITOR) { $('#editor-pill').hidden = false; document.title = 'Automata Lab — editor'; }
     // a link never overwrites the saved work: your own automaton is loaded first
-    const hash = location.hash, own = ownAutomaton();
-    load(own || M.EXAMPLES[0].automaton, { resetHistory: true });
+    const hash = location.hash, own = loadOwn();
     const clearHash = () => history.replaceState(null, '', location.pathname + location.search);
     let exercise = null, exerciseId = null;
     if (hash.startsWith('#m=')) {
       try {
-        load(decode(hash.slice(3)), { keepSaved: true });
+        const B = M.normalize(decode(hash.slice(3)));
+        checkStage(M.automatonStage(B));
+        load(B, { keepSaved: true });
         if (!own) { undoStack = []; renderAll(); }
         history.replaceState(null, '', location.pathname + location.search + hash);   // still there after a reload
         toast(own ? 'Automaton loaded from the link — Undo brings your own back.' : 'Automaton loaded from the link.');
-      } catch (e) { clearHash(); toast('The link does not contain a valid automaton.', true); }
+      } catch (e) { clearHash(); toast(e.message === LOCKED ? LOCKED : 'The link does not contain a valid automaton.', true); }
     } else if (hash.startsWith('#live=')) {
       // a link like …/#live=4821 opens the form with the code filled in
       ui.codeInput = hash.slice(6).replace(/\D/g, '');
@@ -1661,12 +1682,15 @@
       Guide.init(false);
       return;
     } else if (hash.startsWith('#x=')) {
-      try { exercise = M.normalizeExercise(decode(hash.slice(3))); } catch (e) { toast('The link does not contain a valid exercise.', true); }
+      try { const ex = M.normalizeExercise(decode(hash.slice(3))); checkStage(M.exerciseStage(ex)); exercise = ex; }
+      catch (e) { toast(e.message === LOCKED ? LOCKED : 'The link does not contain a valid exercise.', true); }
       clearHash();
     } else {
       try {
         const s = localStorage.getItem(CURRENT_EX_KEY);
         if (s) { exercise = M.normalizeExercise(JSON.parse(s)); exerciseId = localStorage.getItem(CURRENT_EX_ID_KEY); }
+        // a live session may use an exercise that is not unlocked yet
+        if (exercise && M.exerciseStage(exercise) > STAGE && !String(exerciseId).startsWith('live-')) exercise = null;
       } catch (e) { exercise = null; }
     }
     if (exercise) enterExercise(exercise, exerciseId);

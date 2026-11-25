@@ -313,7 +313,7 @@
       const nd = nondeterministicTransitions(A);
       if (nd.length) push({
         level: 'error',
-        text: `Not a ${kind}: ${listed(nd)} ${nd.length === 1 ? 'has' : 'have'} more than one target state. Switch to NFA or remove arrows.`,
+        text: `Not a ${kind}: ${listed(nd)} ${nd.length === 1 ? 'has' : 'have'} more than one target state. Keep one arrow for each symbol.`,
       });
       const und = undefinedTransitions(A);
       if (und.length) push({
@@ -562,6 +562,10 @@
     throw new Error('Unknown kind of exercise.');
   }
 
+  /** The stage (see stage.js) in which an automaton or an exercise becomes available: 2 as soon as NFAs are involved. */
+  function automatonStage(A) { return A.type === 'NFA' ? 2 : 1; }
+  function exerciseStage(ex) { return ex.kind === 'powerset' || (ex.kind === 'construct' && ex.require === 'NFA') ? 2 : 1; }
+
   /** The automaton type the answer must have. */
   function requiredType(ex) {
     if (ex.kind === 'construct') return ex.require || 'any';
@@ -745,6 +749,6 @@
     isDeterministic, undefinedTransitions, nondeterministicTransitions, reachableStates, validate,
     deltaHatSet, stepSet, runFA, runNFA, accepts, computationTree, wordsUpTo, classes, prefixTree, shortestWords,
     fmtWord, fmtSet, autoLayout, layeredLayout,
-    OPS, findDifference, subsetStates, productStates, exerciseTarget, requiredType, checkExercise, normalizeExercise, normalizeCode,
+    OPS, findDifference, subsetStates, productStates, exerciseTarget, requiredType, automatonStage, exerciseStage, checkExercise, normalizeExercise, normalizeCode,
   };
 });
