@@ -60,6 +60,7 @@
     draft: { kind: 'construct', code: '', title: '', text: '', require: 'FA', maxStates: '', op: 'intersection', A1: null, A2: null },
     codeInput: '', codeError: null, codeBusy: false,   // the "Enter a code" form (exercise or live session)
     pending: null,           // arrow just drawn, still without a symbol
+    prod: { M1: null, M2: null, op: 'intersection', step: 0 },   // Simulation tab (product of two FAs)
   };
   const EX_KEY = 'automata-lab:ex:';           // + id → the work on that exercise
   const CURRENT_EX_KEY = 'automata-lab:current-exercise';
@@ -74,6 +75,7 @@
     },
     onBackground(p) {
       ui.dragging = false;
+      if (prodView()) return;
       if (ui.mode === 'state') { tryCommit(() => M.addState(A, null, clearOf(p))); return; }
       ui.selected = null;
       if (ui.pop && ui.pop.type === 'selection') ui.pop = null;
@@ -135,13 +137,13 @@
   }
 
   function undo() {
-    if (!undoStack.length) return;
+    if (!undoStack.length || prodView()) return;
     redoStack.push(JSON.stringify(A));
     A = JSON.parse(undoStack.pop());
     save(); renderAll();
   }
   function redo() {
-    if (!redoStack.length) return;
+    if (!redoStack.length || prodView()) return;
     undoStack.push(JSON.stringify(A));
     A = JSON.parse(redoStack.pop());
     save(); renderAll();
@@ -151,6 +153,7 @@
   function load(obj, { resetHistory, keepSaved } = {}) {
     const B = M.autoLayout(M.normalize(obj));
     ui.selected = null; ui.pop = null; ui.simWord = ''; ui.simStep = 0; ui.batch = ''; ui.fitNext = true;
+    if (ui.tab === 'product') ui.tab = 'definition';
     if (B.type === 'NFA' && ui.tab === 'classes') ui.tab = 'definition';
     if (resetHistory) { undoStack = []; redoStack = []; A = B; if (!keepSaved) save(); renderAll(); }
     else if (keepSaved) { undoStack.push(JSON.stringify(A)); redoStack = []; A = B; renderAll(); }
@@ -240,13 +243,18 @@
     $$('#type-seg button').forEach(b => { b.disabled = req !== 'any' && b.dataset.type !== req; });
     $('#ex-chip').hidden = !ui.exercise;
     $('#btn-examples').hidden = !!ui.exercise;
+    if (ui.exercise && ui.tab === 'product') ui.tab = 'exercise';
     $('.ptabs [data-tab=classes]').hidden = A.type === 'NFA';
+    $('.ptabs [data-tab=product]').hidden = !!ui.exercise;   // it would give away the answer of a product exercise
+    const pv = prodView();
+    $('.tools').hidden = pv;
+    if (pv) { ui.selected = null; if (ui.pop && ui.pop.type !== 'menu') ui.pop = null; }
     $$('.ptabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === ui.tab)));
     $('#btn-new').hidden = $('#btn-share').hidden = !!ui.exercise;
     $('#btn-undo').hidden = $('#btn-redo').hidden = !undoStack.length && !redoStack.length;
     $('#btn-undo').disabled = !undoStack.length;
     $('#btn-redo').disabled = !redoStack.length;
-    $('#empty').hidden = A.states.length > 0;
+    $('#empty').hidden = A.states.length > 0 || pv;
     $('#empty-text').innerHTML = ui.mode === 'state' ? 'Click here to add a state.' : 'Choose <em>State</em> below, then click here.';
     renderGraph();
     renderHint();
@@ -256,7 +264,7 @@
 
   function renderHint() {
     const h = $('#stage-hint');
-    const arrows = M.edges(A).length > 0;      // the hints disappear once the first arrow is drawn
+    const arrows = M.edges(A).length > 0 || prodView();      // the hints disappear once the first arrow is drawn
     if (ui.mode === 'arrow' && graph.pendingSource()) h.textContent = 'Now click the target state (the same one again = loop) or empty space (= new state)';
     else if (!A.states.length || arrows) h.textContent = '';
     else if (ui.mode === 'state') h.textContent = 'Click to add another state · choose Select to draw arrows';
@@ -265,6 +273,14 @@
   }
 
   function renderGraph() {
+    if (prodView()) {
+      const m = prodModel();
+      if (ui.fitNext) ui.fitNext = false;
+      graph.render(m.P, { mode: 'view', active: m.active, activeEdges: m.activeEdges, fit: m.fit });
+      m.fit = false;
+      renderZoom();
+      return;
+    }
     const v = { selected: ui.selected, mode: ui.mode, hoverState: ui.hoverState };
     if (ui.tab === 'simulation') {
       const s = simulation();
@@ -308,7 +324,7 @@
     const treeView = view + '|' + ui.simWord;
     const treeScroll = oldTree && body.dataset.treeView === treeView ? oldTree.scrollLeft : null;
     body.dataset.view = view; body.dataset.treeView = treeView;
-    body.innerHTML = ui.tab === 'definition' ? definitionHTML() : ui.tab === 'simulation' ? simulationHTML()
+    body.innerHTML = ui.tab === 'definition' ? definitionHTML() : ui.tab === 'simulation' ? simulationHTML() : ui.tab === 'product' ? productHTML()
       : ui.tab === 'classes' ? classesHTML() : exerciseHTML();
     mountMinis(body);
     body.scrollTop = scroll;
@@ -816,25 +832,178 @@
   }
 
   function miniHTML(id, automaton, label) {
-    minis.set(id, automaton);
+    minis.set(id, { A: automaton });
     return `<div class="given"><div class="lab"><span class="m">${label}</span><span class="pill">${automaton.type}</span></div><div class="mini" data-mini="${id}"></div></div>`;
+  }
+
+  /**
+   * Two automata as a cross: the second from left to right on top, the first from top to bottom on the left,
+   * so that the pair (q, p) of their product sits in the row of q and the column of p.
+   * v1 / v2: optional highlighted states and arrows; extra1 / extra2: buttons next to the labels.
+   */
+  function crossHTML(one, two, main, corner) {
+    const box = (x, dir) => {
+      minis.set(x.id, { A: x.A, dir, view: x.view });
+      const h = dir === 'vertical' ? ` style="height:${Math.max(150, x.A.states.length * 82 + 40)}px"` : '';
+      return `<div class="lab"><span class="m">${x.label}</span>${x.extra || ''}</div><div class="mini" data-mini="${x.id}"${h}></div>`;
+    };
+    return `<div class="cross"><div class="x-corner">${corner || ''}</div><div class="x-top">${box(two, 'horizontal')}</div>
+      <div class="x-left">${box(one, 'vertical')}</div><div class="x-main">${main || ''}</div></div>`;
   }
 
   /** Draws the read-only diagrams of the given automata after the panel was rendered. */
   function mountMinis(root) {
     root.querySelectorAll('.mini[data-mini]').forEach(box => {
-      const B = minis.get(box.dataset.mini);
-      if (!B) return;
+      const m = minis.get(box.dataset.mini);
+      if (!m) return;
       const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       s.setAttribute('class', 'graph');
       box.appendChild(s);
       const g = Graph.createGraph(s, { onSelect() {}, onBackground() {}, onMove() {}, onAddState() {}, onToggleAccepting() {}, onConnect() {} },
         { inset: { top: 8, bottom: 8, left: 8, right: 8 } });
-      g.render(M.autoLayout(B), { mode: 'view', fit: true });
+      const B = m.A.pos ? m.A : Object.assign({}, m.A, { pos: {} });   // automata stored without positions are laid out here
+      g.render(m.dir ? M.lineLayout(B, m.dir) : M.autoLayout(B),Object.assign({ mode: 'view', fit: true }, m.view || {}));
     });
   }
 
-  // ---------- exercise list (exercises.js) and codes ----------
+  // ---------- Simulation tab: product of two FAs, step by step ----------
+  const PROD_KEY = 'automata-lab:simulation';
+  try { const s = JSON.parse(localStorage.getItem(PROD_KEY)); if (s) Object.assign(ui.prod, s); } catch (e) { /* ignore */ }
+  function saveProd() { try { localStorage.setItem(PROD_KEY, JSON.stringify(ui.prod)); } catch (e) { /* ignore */ } }
+  const prodCache = { key: null, fit: true };
+  const OP_RULE = { union: 'or', intersection: 'and', difference: 'and' };
+
+  /** The canvas shows the product (read-only) while both automata are chosen. */
+  function prodView() { return ui.tab === 'product' && !ui.exercise && !!prodModel().P; }
+
+  /** Everything the Simulation tab shows at the current step. */
+  function prodModel() {
+    const S = ui.prod;
+    if (!S.M1 || !S.M2) return {};
+    const same = S.M1.alphabet.slice().sort().join('\u0001') === S.M2.alphabet.slice().sort().join('\u0001');
+    if (!same) return { error: 'M₁ and M₂ need the same alphabet Σ.' };
+    const key = JSON.stringify([S.M1, S.M2, S.op, S.step]);
+    if (prodCache.key === key) return prodCache.model;
+    const { pairs, steps } = M.productSteps(S.M1, S.M2);
+    // names like in the exercise sheets: q_λ and p_0 give r_λ,0 (r0, r1, … if that does not work)
+    const sub = q => { const [b, s] = Graph.nameParts(q); return s || b; };
+    let names = pairs.map(([q, p]) => `r_${sub(q)},${sub(p)}`);
+    if (new Set(names).size < names.length || names.some(n => /\s/.test(n))) names = pairs.map((_, i) => 'r' + i);
+    const o1 = M.lineOrder(S.M1), o2 = M.lineOrder(S.M2);
+    const step = Math.max(0, Math.min(S.step, steps.length));
+    const found = new Set([0]);
+    steps.slice(0, step).forEach(t => found.add(t.to));
+    const done = step === steps.length;
+    const P = { type: 'FA', states: [], alphabet: S.M1.alphabet.slice(), initial: names[0], accepting: [], delta: {}, pos: {}, arcs: {} };
+    pairs.forEach(([q, p], i) => {
+      if (!found.has(i)) return;
+      P.states.push(names[i]);
+      P.delta[names[i]] = Object.fromEntries(P.alphabet.map(a => [a, []]));
+      P.pos[names[i]] = { x: 100 + o2.indexOf(p) * 150, y: 100 + o1.indexOf(q) * 130 };   // row of q, column of p
+      if (done && M.OPS[S.op].f(S.M1.accepting.includes(q), S.M2.accepting.includes(p))) P.accepting.push(names[i]);
+    });
+    steps.slice(0, step).forEach(t => { P.delta[names[t.from]][t.a] = [names[t.to]]; });
+    const cur = step > 0 ? steps[step - 1] : null;
+    const at = cur ? pairs[cur.from] : pairs[0], to = cur ? pairs[cur.to] : null;
+    const model = { pairs, steps, names, step, done, P, cur,
+      active: new Set([names[cur ? cur.to : 0]]),
+      activeEdges: cur ? new Set([names[cur.from] + '\u0000' + names[cur.to]]) : new Set(),
+      view1: { active: new Set([to ? to[0] : at[0]]), activeEdges: cur ? new Set([at[0] + '\u0000' + to[0]]) : new Set() },
+      view2: { active: new Set([to ? to[1] : at[1]]), activeEdges: cur ? new Set([at[1] + '\u0000' + to[1]]) : new Set() } };
+    model.fit = prodCache.fit; prodCache.fit = false;
+    prodCache.key = key; prodCache.model = model;
+    return model;
+  }
+
+  function productHTML() {
+    const S = ui.prod, m = prodModel();
+    const slot = (k, label) => S[k]
+      ? { id: 'p' + k, A: S[k], label, extra: `<button type="button" class="btn sm text" data-pclear="${k}" title="Choose another automaton">Change</button>`, view: m[k === 'M1' ? 'view1' : 'view2'] }
+      : null;
+    const s1 = slot('M1', 'M<sub>1</sub>'), s2 = slot('M2', 'M<sub>2</sub>');
+    let h = `<div class="card"><div class="lab"><span>Simulation of two FAs</span>
+      <span class="seg">${Object.keys(M.OPS).map(o => `<button type="button" data-pop="${o}" aria-selected="${S.op === o}" title="L(M₁) ${M.OPS[o].symbol} L(M₂)">${M.OPS[o].symbol}</button>`).join('')}</span></div>`;
+    if (!s1 || !s2) {
+      h += `<div class="muted small">An FA M that reads a word with M₁ and M₂ at the same time: its states are pairs (<i>q</i>, <i>p</i>). Draw an FA on the canvas and choose it as M₁, then the next one as M₂.</div>`;
+      for (const [k, s, l] of [['M1', s1, 'M₁'], ['M2', s2, 'M₂']]) {
+        h += s ? miniHTML(s.id, s.A, s.label).replace('</span><span class="pill">FA</span>', `</span>${s.extra}`)
+          : `<button type="button" class="btn" data-puse="${k}">Use canvas as ${l}</button>`;
+      }
+      h += `<div><button type="button" class="btn sm text" data-action="pexample">Try an example</button></div></div>`;
+      return h;
+    }
+    if (m.error) return h + `<div class="code-err">${esc(m.error)}</div>` + crossHTML(s1, s2) + `</div>`;
+    const atEnd = m.step >= m.steps.length;
+    h += `<div class="sim-ctrl">
+        <button type="button" class="btn sq" data-pstep="reset" title="Back to the start" aria-label="Back to the start" ${m.step === 0 ? 'disabled' : ''}><svg class="ic" viewBox="0 0 24 24"><path d="M6 5v14M18 6l-8 6 8 6z"/></svg></button>
+        <button type="button" class="btn sq" data-pstep="back" title="One step back" aria-label="One step back" ${m.step === 0 ? 'disabled' : ''}><svg class="ic" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></svg></button>
+        <button type="button" class="btn dark grow" data-pstep="step" ${atEnd ? 'disabled' : ''}>Step <svg class="ic" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button type="button" class="btn sq" data-pstep="end" title="Run to the end" aria-label="Run to the end" ${atEnd ? 'disabled' : ''}><svg class="ic" viewBox="0 0 24 24"><path d="M18 5v14M6 6l8 6-8 6z"/></svg></button>
+      </div>`;
+    // what happens in this step
+    const N = i => st(m.names[i]), pr = i => `(${st(m.pairs[i][0])}, ${st(m.pairs[i][1])})`;
+    let ex = '';
+    if (!m.cur) {
+      ex = `<div class="txt">Start with the pair of initial states.</div>(<i>q</i><sub>01</sub>, <i>q</i><sub>02</sub>) = ${pr(0)} =: ${N(0)}`;
+    } else {
+      const c = m.cur, [q, p] = m.pairs[c.from], a = sy(c.a);
+      ex = `δ(${pr(c.from)}, ${a}) = (δ<sub>1</sub>(${st(q)}, ${a}), δ<sub>2</sub>(${st(p)}, ${a})) = ${pr(c.to)}
+        <div class="txt">${c.isNew ? `A new pair: it becomes the state ${N(c.to)}.` : `${N(c.to)} is already there.`}</div>`;
+    }
+    h += `<div class="explain">${ex}</div>`;
+    if (atEnd) {
+      const F = m.P.accepting, rule = OP_RULE[S.op], neg = S.op === 'difference' ? '∉' : '∈';
+      const all = S.M1.states.length * S.M2.states.length, left = all - m.pairs.length;
+      h += `<div class="verdict yes"><b>Done</b><div><i>F</i> = { (<i>q</i>, <i>p</i>) | <i>q</i> ∈ <i>F</i><sub>1</sub> ${rule} <i>p</i> ${neg} <i>F</i><sub>2</sub> } = ${set(F)}</div>
+        <div>L(M) = L(M<sub>1</sub>) ${M.OPS[S.op].symbol} L(M<sub>2</sub>)</div>
+        <div class="txt">${left ? `${left} of the |<i>Q</i><sub>1</sub>| · |<i>Q</i><sub>2</sub>| = ${all} pairs cannot be reached from ${pr(0)} and are left out.` : `All |<i>Q</i><sub>1</sub>| · |<i>Q</i><sub>2</sub>| = ${all} pairs are reachable.`}</div></div>
+        <div><button type="button" class="btn sm" data-action="puse-result">Use as my automaton</button></div>`;
+    }
+    h += `</div>`;
+    // M₁ top to bottom, M₂ left to right, δ of the product in between
+    let t = `<table class="delta prod"><thead><tr><th></th>${m.P.alphabet.map(a => `<th>${esc(a)}</th>`).join('')}</tr></thead><tbody>`;
+    const filled = new Map();
+    m.steps.slice(0, m.step).forEach(s => filled.set(s.from + '\u0001' + s.a, s.to));
+    m.pairs.forEach((_, i) => {
+      if (!m.P.states.includes(m.names[i])) return;
+      t += `<tr><td class="name"><span class="mark">${i === 0 ? '→' : ''}</span>${N(i)}${m.P.accepting.includes(m.names[i]) ? '<span class="accmark">F</span>' : ''}<br><span class="pair">${pr(i)}</span></td>`;
+      for (const a of m.P.alphabet) {
+        const k = i + '\u0001' + a, isCur = m.cur && m.cur.from === i && m.cur.a === a;
+        t += `<td class="c ${isCur ? 'cur' : ''}">${filled.has(k) ? N(filled.get(k)) : ''}</td>`;
+      }
+      t += `</tr>`;
+    });
+    t += `</tbody></table>`;
+    return h + `<div class="card">${crossHTML(s1, s2, t, 'M<sub>1</sub> × M<sub>2</sub>')}
+      <div class="legend">M₁ from top to bottom, M₂ from left to right: the pair (<i>q</i>, <i>p</i>) sits in the row of <i>q</i> and the column of <i>p</i>, here and on the canvas.</div></div>`;
+  }
+
+  function prodAction(t) {
+    const S = ui.prod;
+    if (t.dataset.pop) { S.op = t.dataset.pop; }
+    else if (t.dataset.pclear) { S[t.dataset.pclear] = null; S.step = 0; ui.fitNext = true; }
+    else if (t.dataset.puse) {
+      const errs = M.validate(A).filter(i => i.level === 'error');
+      if (A.type !== 'FA' || !A.states.length || errs.length) { toast('Draw a valid finite automaton (FA) on the canvas first.', true); return; }
+      const B = M.clone(A); delete B.pos; delete B.arcs;
+      S[t.dataset.puse] = B; S.step = 0; prodCache.fit = true;
+    } else if (t.dataset.action === 'pexample') {
+      S.M1 = M.clone(M.PRODUCT_EXAMPLE.M1); S.M2 = M.clone(M.PRODUCT_EXAMPLE.M2); S.step = 0; prodCache.fit = true;
+    } else if (t.dataset.action === 'puse-result') {
+      const P = prodModel().P;
+      saveProd();
+      load(P);
+      toast('The product is now on the canvas — Undo brings your own automaton back.');
+      return;
+    } else if (t.dataset.pstep) {
+      const n = prodModel().steps.length, k = t.dataset.pstep;
+      S.step = k === 'reset' ? 0 : k === 'back' ? Math.max(0, S.step - 1) : k === 'step' ? Math.min(n, S.step + 1) : n;
+    }
+    saveProd();
+    renderAll();
+  }
+
+    // ---------- exercise list (exercises.js) and codes ----------
   // Exercises are opened by code; the codes live in exercises.js next to index.html.
   // The editor (index.html?mode=editor) creates exercises and rewrites that file.
   let exList = null;            // [{ code, exercise }]
@@ -999,7 +1168,8 @@
       <p class="ex-text">${esc(ex.text)}</p>
       ${pills.length ? `<div class="row-pills">${pills.map(p => `<span class="pill">${esc(p)}</span>`).join('')}</div>` : ''}
     </div>`;
-    if (ex.kind === 'product') h += `<div class="card">${miniHTML('A1', ex.A1, 'A<sub>1</sub>')}${miniHTML('A2', ex.A2, 'A<sub>2</sub>')}</div>`;
+    if (ex.kind === 'product') h += `<div class="card">${crossHTML({ id: 'A1', A: ex.A1, label: 'A<sub>1</sub>' }, { id: 'A2', A: ex.A2, label: 'A<sub>2</sub>' },
+      `<div class="muted small">The product has one state for each pair (<i>q</i>, <i>p</i>). Drawn in the row of <i>q</i> and the column of <i>p</i>, it looks like the grid of A<sub>1</sub> × A<sub>2</sub>.</div>`, 'A<sub>1</sub> × A<sub>2</sub>')}</div>`;
     if (ex.kind === 'powerset') h += `<div class="card">${miniHTML('N', ex.nfa, 'N')}</div>`;
     h += `<div class="card"><div class="muted small">Build your answer on the canvas, then check it.</div>
       <button type="button" class="btn dark wide" data-action="check">Check my automaton</button>`;
@@ -1443,6 +1613,7 @@
     renderGraph();
   });
   $$('.ptabs button').forEach(b => b.addEventListener('click', () => {
+    if ((ui.tab === 'product') !== (b.dataset.tab === 'product')) { ui.fitNext = true; prodCache.fit = true; }
     ui.tab = b.dataset.tab; ui.hoverState = null;
     if (ui.pop && ui.pop.type === 'cell') ui.pop = null;
     renderAll();
@@ -1453,6 +1624,7 @@
     renderPop();
   });
   $('#btn-new').addEventListener('click', () => {
+    if (ui.tab === 'product') ui.tab = 'definition';
     ui.selected = null; ui.pop = null; ui.mode = 'state'; ui.fitNext = true;
     ui.simWord = ''; ui.simStep = 0; ui.batch = '';
     commit(M.setAlphabet(M.empty(A.type), ['a', 'b']));
@@ -1577,6 +1749,8 @@
       }
       return;
     }
+    const pt = e.target.closest('[data-pop],[data-pclear],[data-puse],[data-pstep],[data-action=pexample],[data-action=puse-result]');
+    if (pt && !pt.disabled) { prodAction(pt); return; }
     const t = e.target.closest('[data-sim],[data-action],[data-select],[data-word],[data-dview],[data-n],.cell');
     if (!t) return;
     if (t.classList.contains('cell')) {

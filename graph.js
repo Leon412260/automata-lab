@@ -449,9 +449,10 @@
     svg.addEventListener('pointerdown', evt => {
       if (!A || evt.button > 1) return;
       const p = toLocal(evt);
-      const conn = evt.button === 0 ? connAt(p) : null;
-      const q = conn ? null : stateAt(p);
-      const edgeEl = evt.target.closest && evt.target.closest('.edge');
+      const ro = view.mode === 'view';           // read-only: only pan and zoom
+      const conn = evt.button === 0 && !ro ? connAt(p) : null;
+      const q = conn || ro ? null : stateAt(p);
+      const edgeEl = !ro && evt.target.closest && evt.target.closest('.edge');
       if (conn) {
         // the "new arrow" handle of a state: drag it to another state (or onto empty space)
         evt.preventDefault();

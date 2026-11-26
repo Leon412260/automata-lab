@@ -548,6 +548,49 @@
     return Array.from(seen.values());
   }
 
+  /** The states in reading order: breadth-first from the initial state, then the others. */
+  function lineOrder(A) {
+    const order = [];
+    const queue = A.initial !== null ? [A.initial] : [];
+    while (queue.length) {
+      const q = queue.shift();
+      if (order.includes(q)) continue;
+      order.push(q);
+      for (const a of A.alphabet) for (const p of targets(A, q, a)) if (!order.includes(p)) queue.push(p);
+    }
+    for (const q of A.states) if (!order.includes(q)) order.push(q);
+    return order;
+  }
+
+  /** All states on one line: 'vertical' (top to bottom) or 'horizontal' (left to right). */
+  function lineLayout(A, dir) {
+    const B = clone(A);
+    B.arcs = {}; B.pos = {};
+    lineOrder(A).forEach((q, i) => { B.pos[q] = dir === 'vertical' ? { x: 100, y: 100 + i * 110 } : { x: 100 + i * 130, y: 100 }; });
+    return B;
+  }
+
+  /**
+   * The product construction (simulation of two FAs) in the order of the book: start with the pair of initial
+   * states, then fill δ((q, p), a) = (δ₁(q, a), δ₂(p, a)) pair after pair, symbol after symbol.
+   * → { pairs: [[q, p], …] in the order they are found, steps: [{ from, a, to, isNew }] (indices into pairs) }.
+   * Both automata must be total FAs over the same alphabet.
+   */
+  function productSteps(A1, A2) {
+    const pairs = [[A1.initial, A2.initial]], steps = [];
+    const index = new Map([[A1.initial + '\u0001' + A2.initial, 0]]);
+    for (let i = 0; i < pairs.length; i++) {
+      const [q, p] = pairs[i];
+      for (const a of A1.alphabet) {
+        const P = [targets(A1, q, a)[0], targets(A2, p, a)[0]], k = P.join('\u0001');
+        const isNew = !index.has(k);
+        if (isNew) { index.set(k, pairs.length); pairs.push(P); }
+        steps.push({ from: i, a, to: index.get(k), isNew });
+      }
+    }
+    return { pairs, steps };
+  }
+
   const OPS = {
     union: { symbol: '∪', name: 'union', f: (x, y) => x || y },
     intersection: { symbol: '∩', name: 'intersection', f: (x, y) => x && y },
@@ -708,6 +751,18 @@
 
   // ---------- examples (generic, not taken from the exercise sheets; no positions → laid out with layeredLayout) ----------
 
+  /** Two FAs for the Simulation tab: w ends with ab (M₁) and |w|ₐ is even (M₂) — their product is the second example. */
+  const PRODUCT_EXAMPLE = {
+    M1: {
+      type: 'FA', states: ['q_λ', 'q_a', 'q_ab'], alphabet: ['a', 'b'], initial: 'q_λ', accepting: ['q_ab'],
+      delta: { 'q_λ': { a: ['q_a'], b: ['q_λ'] }, 'q_a': { a: ['q_a'], b: ['q_ab'] }, 'q_ab': { a: ['q_a'], b: ['q_λ'] } },
+    },
+    M2: {
+      type: 'FA', states: ['p_0', 'p_1'], alphabet: ['a', 'b'], initial: 'p_0', accepting: ['p_0'],
+      delta: { 'p_0': { a: ['p_1'], b: ['p_0'] }, 'p_1': { a: ['p_0'], b: ['p_1'] } },
+    },
+  };
+
   const EXAMPLES = [
     {
       title: 'FA: w contains the subword ab',
@@ -742,13 +797,13 @@
 
 
   return {
-    LAMBDA, EMPTY_SET, EXAMPLES,
+    LAMBDA, EMPTY_SET, EXAMPLES, PRODUCT_EXAMPLE,
     empty, clone, normalize, checkStateName, checkSymbol, parseList, splitWord, nextStateName,
     addState, removeState, renameState, setInitial, setAccepting, setAlphabet, targets, setTargets,
     edgeSymbols, setEdgeSymbols, edges, addTrapState, setType, arcKey, setArc, pruneArcs,
     isDeterministic, undefinedTransitions, nondeterministicTransitions, reachableStates, validate,
     deltaHatSet, stepSet, runFA, runNFA, accepts, computationTree, wordsUpTo, classes, prefixTree, shortestWords,
     fmtWord, fmtSet, autoLayout, layeredLayout,
-    OPS, findDifference, subsetStates, productStates, exerciseTarget, requiredType, automatonStage, exerciseStage, checkExercise, normalizeExercise, normalizeCode,
+    OPS, findDifference, subsetStates, productStates, exerciseTarget, requiredType, lineOrder, lineLayout, productSteps, automatonStage, exerciseStage, checkExercise, normalizeExercise, normalizeCode,
   };
 });
