@@ -529,6 +529,25 @@
     return Array.from(seen.values());
   }
 
+  /**
+   * The powerset construction in the order of the book: start with ⟨q0⟩, then fill δ'(P, a) = ⋃ δ(p, a) for p ∈ P,
+   * set after set, symbol after symbol. Only reachable sets (∅ included, if it is reached).
+   * → { sets: [[q, …], …] in the order they are found, steps: [{ from, a, to, isNew }] (indices into sets) }.
+   */
+  function subsetSteps(N) {
+    const sets = [[N.initial]], steps = [];
+    const index = new Map([[N.initial, 0]]);
+    for (let i = 0; i < sets.length; i++) {
+      for (const a of N.alphabet) {
+        const T = stepSet(N, sets[i], a), k = T.join('\u0001');
+        const isNew = !index.has(k);
+        if (isNew) { index.set(k, sets.length); sets.push(T); }
+        steps.push({ from: i, a, to: index.get(k), isNew });
+      }
+    }
+    return { sets, steps };
+  }
+
   /** Reachable states of the product construction of two FAs: list of pairs [p, q]. */
   function productStates(A1, A2) {
     if (A1.initial === null || A2.initial === null) return [];
@@ -804,6 +823,6 @@
     isDeterministic, undefinedTransitions, nondeterministicTransitions, reachableStates, validate,
     deltaHatSet, stepSet, runFA, runNFA, accepts, computationTree, wordsUpTo, classes, prefixTree, shortestWords,
     fmtWord, fmtSet, autoLayout, layeredLayout,
-    OPS, findDifference, subsetStates, productStates, exerciseTarget, requiredType, lineOrder, lineLayout, productSteps, automatonStage, exerciseStage, checkExercise, normalizeExercise, normalizeCode,
+    OPS, findDifference, subsetStates, productStates, exerciseTarget, requiredType, lineOrder, lineLayout, productSteps, subsetSteps, automatonStage, exerciseStage, checkExercise, normalizeExercise, normalizeCode,
   };
 });

@@ -75,7 +75,7 @@
     },
     onBackground(p) {
       ui.dragging = false;
-      if (prodView()) return;
+      if (viewOnly()) return;
       if (ui.mode === 'state') { tryCommit(() => M.addState(A, null, clearOf(p))); return; }
       ui.selected = null;
       if (ui.pop && ui.pop.type === 'selection') ui.pop = null;
@@ -137,13 +137,13 @@
   }
 
   function undo() {
-    if (!undoStack.length || prodView()) return;
+    if (!undoStack.length || viewOnly()) return;
     redoStack.push(JSON.stringify(A));
     A = JSON.parse(undoStack.pop());
     save(); renderAll();
   }
   function redo() {
-    if (!redoStack.length || prodView()) return;
+    if (!redoStack.length || viewOnly()) return;
     undoStack.push(JSON.stringify(A));
     A = JSON.parse(redoStack.pop());
     save(); renderAll();
@@ -246,9 +246,12 @@
     if (ui.exercise && ui.tab === 'product') ui.tab = 'exercise';
     $('.ptabs [data-tab=classes]').hidden = A.type === 'NFA';
     $('.ptabs [data-tab=product]').hidden = !!ui.exercise;   // it would give away the answer of a product exercise
-    const pv = prodView();
+    if (ui.tab === 'powerset' && (A.type !== 'NFA' || ui.exercise)) ui.tab = 'definition';
+    $('.ptabs [data-tab=powerset]').hidden = A.type !== 'NFA' || !!ui.exercise;   // only for NFAs (where Classes is hidden)
+    const pv = viewOnly();
     $('.tools').hidden = pv;
-    $('#prod-chip').hidden = !pv;
+    $('#prod-chip').hidden = !prodView();
+    $('#ps-chip').hidden = !psView();
     if (pv) { ui.selected = null; if (ui.pop && ui.pop.type !== 'menu') ui.pop = null; }
     $$('.ptabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === ui.tab)));
     $('#btn-new').hidden = $('#btn-share').hidden = !!ui.exercise;
@@ -265,7 +268,7 @@
 
   function renderHint() {
     const h = $('#stage-hint');
-    const arrows = M.edges(A).length > 0 || prodView();      // the hints disappear once the first arrow is drawn
+    const arrows = M.edges(A).length > 0 || viewOnly();      // the hints disappear once the first arrow is drawn
     if (ui.mode === 'arrow' && graph.pendingSource()) h.textContent = 'Now click the target state (the same one again = loop) or empty space (= new state)';
     else if (!A.states.length || arrows) h.textContent = '';
     else if (ui.mode === 'state') h.textContent = 'Click to add another state · choose Select to draw arrows';
@@ -274,6 +277,24 @@
   }
 
   function renderGraph() {
+    const ps = psView();
+    $('#ps-top').hidden = !ps;
+    if (ps) {
+      const m = psModel();
+      if (ui.fitNext) ui.fitNext = false;
+      if (!stripGraph) {
+        const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        s.setAttribute('class', 'graph');
+        $('#ps-top').appendChild(s);
+        stripGraph = Graph.createGraph(s, { onSelect() {}, onBackground() {}, onMove() {}, onAddState() {}, onToggleAccepting() {}, onConnect() {} },
+          { inset: { top: 30, bottom: 10, left: 24, right: 70 }, maxZoom: 0.7 });   // smaller than the FA below
+      }
+      stripGraph.render(m.strip.A, Object.assign({ mode: 'view', fit: true }, m.strip.view));
+      graph.render(m.view.A, Object.assign({ mode: 'view', fit: m.fit }, m.view.view));
+      m.fit = false;
+      renderZoom();
+      return;
+    }
     if (prodView()) {
       const m = prodModel();
       if (ui.fitNext) ui.fitNext = false;
@@ -325,7 +346,7 @@
     const treeView = view + '|' + ui.simWord;
     const treeScroll = oldTree && body.dataset.treeView === treeView ? oldTree.scrollLeft : null;
     body.dataset.view = view; body.dataset.treeView = treeView;
-    body.innerHTML = ui.tab === 'definition' ? definitionHTML() : ui.tab === 'simulation' ? simulationHTML() : ui.tab === 'product' ? productHTML()
+    body.innerHTML = ui.tab === 'definition' ? definitionHTML() : ui.tab === 'simulation' ? simulationHTML() : ui.tab === 'product' ? productHTML() : ui.tab === 'powerset' ? powersetHTML()
       : ui.tab === 'classes' ? classesHTML() : exerciseHTML();
     mountMinis(body);
     body.scrollTop = scroll;
@@ -912,6 +933,120 @@
   const OP_RULE = { union: 'or', intersection: 'and', difference: 'and' };
 
   /** The canvas shows the product (read-only) while both automata are chosen. */
+  /** The canvas shows a construction and cannot be edited. */
+  function viewOnly() { return prodView() || psView(); }
+
+  // ---------- Powerset tab: the FA for the NFA on the canvas, step by step ----------
+  const psCache = { key: null, fit: true };
+  let stripGraph = null;   // the small NFA above the canvas
+  ui.psStep = 0;
+
+  function psView() { return ui.tab === 'powerset' && A.type === 'NFA' && !ui.exercise && !!psModel().view; }
+
+  function psModel() {
+    const errs = M.validate(A).filter(i => i.level === 'error');
+    if (!A.states.length || errs.length) return { error: errs.length ? errs[0].rich : 'Draw an NFA first.' };
+    const key = JSON.stringify([A.states, A.alphabet, A.initial, A.accepting, A.delta, A.pos, ui.psStep]);
+    if (psCache.key === key) return psCache.model;
+    const { sets, steps } = M.subsetSteps(A);
+    // names: {q0, q1} becomes q_0,1 when all states are q-something (like r_λ,0 in the product), ∅ stays ∅
+    const parts = A.states.map(q => Graph.nameParts(q));
+    const base = parts[0][0], sameBase = parts.every(([b, s]) => b === base && s);
+    const sub = q => Graph.nameParts(q)[1];
+    let names = sets.map((S, i) => !S.length ? '∅' : sameBase ? `${base}_${S.map(sub).join(',')}` : 'r' + i);
+    if (new Set(names).size < names.length || names.some(n => /\s/.test(n))) names = sets.map((S, i) => S.length ? 'r' + i : '∅');
+    const step = Math.max(0, Math.min(ui.psStep, steps.length)), done = step === steps.length;
+    const found = new Set([0]);
+    steps.slice(0, step).forEach(t => found.add(t.to));
+    // the whole FA is laid out first (like Arrange), so it does not move while it grows; sets not found yet are invisible
+    const F = sets.map(S => S.some(q => A.accepting.includes(q)));
+    const D = { type: 'FA', states: names.slice(), alphabet: A.alphabet.slice(), initial: names[0], accepting: names.filter((_, i) => F[i]), delta: {}, pos: {}, arcs: {} };
+    names.forEach(n => { D.delta[n] = Object.fromEntries(D.alphabet.map(a => [a, []])); });
+    steps.forEach(t => { D.delta[names[t.from]][t.a] = [names[t.to]]; });
+    D.pos = M.layeredLayout(D).pos;
+    const V = { type: 'FA', states: names.slice(), alphabet: A.alphabet.slice(), initial: names[0], accepting: done ? D.accepting.slice() : [], delta: {}, pos: D.pos, arcs: {} };
+    names.forEach(n => { V.delta[n] = Object.fromEntries(V.alphabet.map(a => [a, []])); });
+    steps.slice(0, step).forEach(t => { V.delta[names[t.from]][t.a] = [names[t.to]]; });
+    const hidden = new Set(names.filter((_, i) => !found.has(i)));
+    const cur = step > 0 ? steps[step - 1] : null;
+    const P = sets[cur ? cur.from : 0];
+    const nfaEdges = new Set();
+    if (cur) for (const p of P) for (const r of M.targets(A, p, cur.a)) nfaEdges.add(p + '\u0000' + r);
+    const view = { A: V, view: {
+      symbolColors: true, hidden,
+      active: new Set([names[cur ? cur.to : 0]]),
+      activeEdges: cur ? new Set([names[cur.from] + '\u0000' + names[cur.to]]) : new Set(),
+    } };
+    const strip = { A: M.autoLayout(A), view: { symbolColors: true, active: new Set(P), activeEdges: nfaEdges } };
+    const model = { sets, steps, names, step, done, cur, F, view, strip, D, fit: psCache.fit };
+    psCache.fit = false;
+    psCache.key = key; psCache.model = model;
+    return model;
+  }
+
+  function powersetHTML() {
+    const m = psModel();
+    let h = `<div class="card"><div class="lab"><span>Powerset construction</span></div>`;
+    if (m.error) return h + `<div class="muted small">The FA is built from the NFA on the canvas. First complete the NFA:</div><div class="code-err">${rich(m.error)}</div></div>`;
+    const atEnd = m.step >= m.steps.length;
+    h += `<div class="sim-ctrl">
+        <button type="button" class="btn sq" data-sstep="reset" title="Back to the start" aria-label="Back to the start" ${m.step === 0 ? 'disabled' : ''}><svg class="ic" viewBox="0 0 24 24"><path d="M6 5v14M18 6l-8 6 8 6z"/></svg></button>
+        <button type="button" class="btn sq" data-sstep="back" title="One step back" aria-label="One step back" ${m.step === 0 ? 'disabled' : ''}><svg class="ic" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></svg></button>
+        <button type="button" class="btn dark grow" data-sstep="step" ${atEnd ? 'disabled' : ''}>Step <svg class="ic" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg></button>
+        <button type="button" class="btn sq" data-sstep="end" title="Run to the end" aria-label="Run to the end" ${atEnd ? 'disabled' : ''}><svg class="ic" viewBox="0 0 24 24"><path d="M18 5v14M6 6l8 6-8 6z"/></svg></button>
+      </div>`;
+    const N = i => st(m.names[i]), S = i => m.sets[i].length ? `⟨${m.sets[i].map(st).join(', ')}⟩` : '∅';
+    let ex;
+    if (!m.cur) {
+      ex = `<div class="txt">Start with the set that contains only the initial state of the NFA.</div>⟨${st(A.initial)}⟩ =: ${N(0)}`;
+    } else {
+      const c = m.cur, P = m.sets[c.from], a = sy(c.a);
+      ex = `δ′(${S(c.from)}, ${a}) = <span class="bigop">⋃</span><sub><i>p</i> ∈ ${S(c.from)}</sub> δ(<i>p</i>, ${a})`;
+      if (P.length) ex += `<br>= ${P.map(p => `δ(${st(p)}, ${a})`).join(' ∪ ')}<br>= ${P.map(p => set(M.targets(A, p, c.a))).join(' ∪ ')}`;
+      ex += ` = ${S(c.to)}<div class="txt">${c.isNew ? `A new set: it becomes the state ${N(c.to)}.` : `${N(c.to)} is already there.`}</div>`;
+    }
+    h += `<div class="explain">${ex}</div>`;
+    if (atEnd) {
+      const n = A.states.length, all = Math.pow(2, n), left = all - m.sets.length;
+      h += `<div class="verdict yes"><b>Done</b><div><i>F</i>′ = { <i>P</i> | <i>P</i> ∩ <i>F</i> ≠ ∅ } = ${set(m.names.filter((_, i) => m.F[i]))}</div>
+        <div>L(M) = L(N)</div>
+        <div class="txt">${left ? `${left} of the 2<sup>${n}</sup> = ${all} subsets of <i>Q</i> cannot be reached from ⟨${st(A.initial)}⟩ and are left out.` : `All 2<sup>${n}</sup> = ${all} subsets of <i>Q</i> are reachable.`}</div></div>
+        <div><button type="button" class="btn sm" data-action="suse-result">Use as my automaton</button></div>`;
+    }
+    h += `</div>`;
+    const filled = new Map();
+    m.steps.slice(0, m.step).forEach(s => filled.set(s.from + '\u0001' + s.a, s.to));
+    let t = `<table class="delta prod"><thead><tr><th></th>${A.alphabet.map(a => `<th>${esc(a)}</th>`).join('')}</tr></thead><tbody>`;
+    const shown = new Set([0]);
+    m.steps.slice(0, m.step).forEach(s => shown.add(s.to));
+    m.sets.forEach((_, i) => {
+      if (!shown.has(i)) return;
+      t += `<tr><td class="name"><span class="mark">${i === 0 ? '→' : ''}</span>${N(i)}${m.done && m.F[i] ? '<span class="accmark">F</span>' : ''}<br><span class="pair">${S(i)}</span></td>`;
+      for (const a of A.alphabet) {
+        const k = i + '\u0001' + a, isCur = m.cur && m.cur.from === i && m.cur.a === a;
+        t += `<td class="c ${isCur ? 'cur' : ''}">${filled.has(k) ? N(filled.get(k)) : ''}</td>`;
+      }
+      t += `</tr>`;
+    });
+    t += `</tbody></table>`;
+    return h + `<div class="card"><div class="lab"><span class="m">δ′ of M</span></div>${t}
+      <div class="legend">On the canvas the NFA N is small on top; below, the FA M appears state by state in its final place. Highlighted in N: the states of the current set and the arrows read.</div></div>`;
+  }
+
+  function psAction(t) {
+    const m = psModel();
+    if (t.dataset.action === 'suse-result') {
+      const D = m.D;
+      ui.psStep = 0;
+      load(D);
+      toast('The FA is now on the canvas — Undo brings your NFA back.');
+      return;
+    }
+    const n = m.steps.length, k = t.dataset.sstep;
+    ui.psStep = k === 'reset' ? 0 : k === 'back' ? Math.max(0, m.step - 1) : k === 'step' ? Math.min(n, m.step + 1) : n;
+    renderAll();
+  }
+
   function prodView() { return ui.tab === 'product' && !ui.exercise && !!prodModel().P; }
 
   /** Everything the Simulation tab shows at the current step. */
@@ -1656,7 +1791,8 @@
     renderGraph();
   });
   $$('.ptabs button').forEach(b => b.addEventListener('click', () => {
-    if ((ui.tab === 'product') !== (b.dataset.tab === 'product')) { ui.fitNext = true; prodCache.fit = true; }
+    const big = t => t === 'product' || t === 'powerset';   // tabs that show a construction on the canvas
+    if (big(ui.tab) || big(b.dataset.tab)) { ui.fitNext = true; prodCache.fit = true; psCache.fit = true; }
     ui.tab = b.dataset.tab; ui.hoverState = null;
     if (ui.pop && ui.pop.type === 'cell') ui.pop = null;
     renderAll();
@@ -1675,6 +1811,7 @@
   });
   $('#ex-chip').addEventListener('click', leaveExercise);
   // leave the simulation: back to your own automaton on the canvas, with M₁ and M₂ to be chosen again
+  $('#ps-chip').addEventListener('click', () => { ui.tab = 'definition'; ui.fitNext = true; psCache.fit = true; renderAll(); });
   $('#prod-chip').addEventListener('click', () => { Object.assign(ui.prod, { M1: null, M2: null, step: 0 }); saveProd(); ui.fitNext = true; prodCache.fit = true; renderAll(); });
   $('#btn-undo').addEventListener('click', undo);
   $('#btn-redo').addEventListener('click', redo);
@@ -1794,6 +1931,8 @@
       }
       return;
     }
+    const st2 = e.target.closest('[data-sstep],[data-action=suse-result]');
+    if (st2 && !st2.disabled) { psAction(st2); return; }
     const pt = e.target.closest('[data-pop],[data-pclear],[data-puse],[data-pstep],[data-action=pexample],[data-action=puse-result]');
     if (pt && !pt.disabled) { prodAction(pt); return; }
     const t = e.target.closest('[data-sim],[data-action],[data-select],[data-word],[data-dview],[data-n],.cell');

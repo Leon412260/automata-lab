@@ -115,7 +115,7 @@
       const aw = Math.max(80, w - INS.left - INS.right), ah = Math.max(80, h - INS.top - INS.bottom);
       if (!b) { cam = { x: -INS.left, y: -INS.top, k: 1 }; autoFit = true; return; }
       const bw = b.x1 - b.x0, bh = b.y1 - b.y0;
-      const k = Math.max(MIN_K, Math.min(MAX_K, 1, aw / bw, ah / bh));
+      const k = Math.max(MIN_K, Math.min(MAX_K, (opts && opts.maxZoom) || 1, aw / bw, ah / bh));
       cam = {
         k,
         x: b.x0 - (INS.left + (aw - bw * k) / 2) / k,
@@ -417,6 +417,7 @@
         if (view.hoverState === q) cls.push('hover');
         if (view.hoverState && view.hoverState !== q) cls.push('faded');
         if (view.ghost && view.ghost.has(q)) cls.push('ghost-state');
+        if (view.hidden && view.hidden.has(q)) cls.push('hidden-state');   // keeps its place (the view does not jump)
         const g = el('g', { class: cls.join(' '), 'data-state': q, transform: `translate(${p.x},${p.y})` }, stateLayer);
         const c = el('circle', { r: R, class: 'state-circle' }, g);
         if (colors && colors[q]) { c.style.fill = colors[q] + '33'; c.style.stroke = colors[q]; }

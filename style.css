@@ -74,7 +74,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 /* ---------- layout ---------- */
 .layout { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 420px; min-height: 0; }
 .stage {
-  position: relative; min-height: 0; display: flex; overflow: hidden;
+  position: relative; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
   background-color: var(--bg);
   background-image: radial-gradient(var(--dots) 1px, transparent 1.2px); background-size: 22px 22px;
 }
@@ -95,6 +95,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   border-radius: 999px; padding: 5px 13px; box-shadow: 0 1px 2px #0000000d; white-space: nowrap; max-width: calc(100% - 150px); overflow: hidden; text-overflow: ellipsis;
 }
 .stage-hint:empty { display: none; }
+/* Powerset tab: the NFA small on top, the FA in the rest of the canvas */
+.ps-top { flex: none; height: 30%; min-height: 150px; max-height: 240px; position: relative; border-bottom: 1px dashed var(--line-hover); }
+.ps-top svg { width: 100%; height: 100%; display: block; pointer-events: none; }
+.ps-label { position: absolute; left: 14px; top: 10px; font-size: 12px; color: var(--muted); font-weight: 500; }
+.ps-label i { font-family: var(--math); font-size: 15px; color: var(--ink); }
+.state.hidden-state { visibility: hidden; }
 
 .empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; pointer-events: none; color: var(--muted); }
 .empty b { color: var(--ink); font-weight: 600; font-size: 15px; }

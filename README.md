@@ -33,6 +33,8 @@ no account. Your automata and your answers are saved in your browser automatical
 - **Simulation** (FA only) — the product of two FAs M₁ and M₂, built step by step: choose M₁ and
   M₂, then ∪, ∩ or −, and press **Step**. As in the exercise solutions, M₂ is drawn on top, M₁ on the
   left, and the pair (q, p) sits in the row of q and the column of p; arrows are coloured by their symbol.
+- **Powerset** (NFA only) — the powerset construction for the NFA on the canvas, step by step:
+  δ′(P, a) = ⋃ δ(p, a) for p ∈ P, one set and one symbol at a time. **Use as my automaton** puts the FA on the canvas.
 - **Classes** (FA only) — the classes Kl[q] = { w ∈ Σ* | δ̂(q₀, w) = q } with their words and a
   coloured prefix tree. Click a word to run it.
 - **Exercise** — see below.

@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=8">
+<link rel="stylesheet" href="style.css?v=10">
 <script>
   // day/night: the saved choice, otherwise the system setting (set before the page is drawn, so it never flashes)
   try {
@@ -31,6 +31,7 @@
   </div>
   <button type="button" class="pill ex-chip" id="ex-chip" hidden title="Leave the exercise and go back to your own automaton">Exercise <span aria-hidden="true">·</span> Leave ×</button>
   <button type="button" class="pill ex-chip" id="prod-chip" hidden title="Leave the simulation: back to your automaton, choose M₁ and M₂ again">Simulation <span aria-hidden="true">·</span> Leave ×</button>
+  <button type="button" class="pill ex-chip" id="ps-chip" hidden title="Leave the powerset construction: back to your NFA">Powerset <span aria-hidden="true">·</span> Leave ×</button>
   <div class="acts">
     <button type="button" class="btn" id="btn-examples" aria-haspopup="menu">Examples
       <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
@@ -50,6 +51,7 @@
 <main class="layout">
   <section class="stage" aria-label="State diagram">
     <div class="stage-hint" id="stage-hint"></div>
+    <div class="ps-top" id="ps-top" hidden><span class="ps-label">NFA <i>N</i></span></div>
     <svg id="graph" class="graph" role="img" aria-label="State diagram of the automaton"></svg>
     <div class="empty" id="empty" hidden>
       <b>No states yet</b>
@@ -80,6 +82,7 @@
       <button type="button" role="tab" data-tab="simulation">Run</button>
       <button type="button" role="tab" data-tab="product" title="Simulation of two finite automata (product automaton)">Simulation</button>
       <button type="button" role="tab" data-tab="classes">Classes</button>
+      <button type="button" role="tab" data-tab="powerset" title="Powerset construction: the FA for this NFA, step by step">Powerset</button>
       <button type="button" role="tab" data-tab="exercise">Exercise</button>
     </div></div>
     <div id="panel-body" class="panel-body"></div>
@@ -93,12 +96,12 @@
 
 <!-- raise every ?v= number at each release, so browsers never mix old and new files -->
 <!-- all files sit next to index.html (no subfolders), so uploading to GitHub is just "select all files" -->
-<script src="stage.js?v=8"></script>
-<script src="core.js?v=8"></script>
-<script src="graph.js?v=8"></script>
-<script src="guide.js?v=8"></script>
-<script src="live-config.js?v=8"></script>
-<script src="live.js?v=8"></script>
-<script src="app.js?v=8"></script>
+<script src="stage.js?v=10"></script>
+<script src="core.js?v=10"></script>
+<script src="graph.js?v=10"></script>
+<script src="guide.js?v=10"></script>
+<script src="live-config.js?v=10"></script>
+<script src="live.js?v=10"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>
