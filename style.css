@@ -8,6 +8,7 @@
   --err: #B42318; --err-bg: #FEF3F2;
   --accent: #2F6FEB; --accent-soft: #2F6FEB1F;
   --edge: #18181B; --state-fill: #fff; --dots: #E4E4E7;
+  --sym0: #1D4ED8; --sym1: #D92D20; --sym2: #15803D; --sym3: #B45309; --sym4: #7E22CE;   /* arrows coloured by symbol */
   --shadow: 0 12px 36px #0000001f; --scrim: #18181B40;
   --math: "Cambria Math", "STIX Two Math", "Latin Modern Math", Cambria, "Times New Roman", serif;
   color-scheme: light;
@@ -22,6 +23,7 @@
   --err: #F97066; --err-bg: #3A1714;
   --accent: #6EA0FF; --accent-soft: #6EA0FF29;
   --edge: #E4E4E7; --state-fill: #1A1A1D; --dots: #26262A;
+  --sym0: #7DA2FF; --sym1: #FF8A80; --sym2: #6EE7A0; --sym3: #FBBF5E; --sym4: #D8A6FF;
   --shadow: 0 12px 36px #00000080; --scrim: #000000A0;
   color-scheme: dark;
 }
@@ -138,6 +140,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 .state.active .state-circle { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 3; }
 .state.active .state-inner { stroke: var(--accent); }
 .state.faded { opacity: .25; }
+/* a pair of the product that is not (yet) a state */
+.state.ghost-state .state-circle { fill: none; stroke: var(--line-hover); stroke-dasharray: 4 4; stroke-width: 1.2; }
+.state.ghost-state .state-name { fill: var(--muted-3); }
+.guide-line { stroke: var(--muted-3); stroke-width: 1.2; stroke-dasharray: 5 6; }
 .state.hover .state-circle { stroke-width: 3.5; }
 
 .edge { cursor: pointer; }
@@ -333,16 +339,6 @@ table.steps tr.cur td { background: var(--accent-soft); }
 .given + .given { margin-top: 6px; }
 .mini { height: 170px; border-radius: 10px; background: var(--bg); background-image: radial-gradient(var(--dots) 1px, transparent 1.2px); background-size: 18px 18px; overflow: hidden; display: flex; }
 .mini svg { pointer-events: none; }
-/* two automata as a cross: M₂ from left to right on top, M₁ from top to bottom on the left —
-   the pair (q, p) of the product sits in the row of q and the column of p */
-.cross { display: grid; grid-template-columns: 124px minmax(0, 1fr); grid-template-rows: auto auto; gap: 8px; }
-.cross .x-corner { display: flex; align-items: flex-end; justify-content: center; font-family: var(--math); font-size: 15px; color: var(--muted); padding-bottom: 4px; }
-.cross .x-top { grid-column: 2; }
-.cross .x-left { grid-row: 2; }
-.cross .x-main { grid-row: 2; grid-column: 2; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.cross .mini { height: 120px; }
-.cross .x-left .mini { height: auto; }
-.cross .lab .btn { text-transform: none; letter-spacing: 0; }
 table.prod td.name { white-space: nowrap; }
 table.prod td.name .pair { color: var(--muted); font-size: 13.5px; }
 table.prod td.c { text-align: center; }

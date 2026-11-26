@@ -31,8 +31,8 @@ no account. Your automata and your answers are saved in your browser automatical
   (q, w) ⊢ (p, w′), δ̂ step by step and whether the word is in L(M). For an NFA you also see all
   computations as a tree. **Test several words…** is at the bottom.
 - **Simulation** (FA only) — the product of two FAs M₁ and M₂, built step by step: choose M₁ and
-  M₂, then ∪, ∩ or −, and press **Step**. M₁ is drawn from top to bottom, M₂ from left to right, so the
-  pair (q, p) sits in the row of q and the column of p.
+  M₂, then ∪, ∩ or −, and press **Step**. As in the exercise solutions, M₂ is drawn on top, M₁ on the
+  left, and the pair (q, p) sits in the row of q and the column of p; arrows are coloured by their symbol.
 - **Classes** (FA only) — the classes Kl[q] = { w ∈ Σ* | δ̂(q₀, w) = q } with their words and a
   coloured prefix tree. Click a word to run it.
 - **Exercise** — see below.

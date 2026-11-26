@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=5">
+<link rel="stylesheet" href="style.css?v=8">
 <script>
   // day/night: the saved choice, otherwise the system setting (set before the page is drawn, so it never flashes)
   try {
@@ -30,6 +30,7 @@
     <button type="button" data-type="NFA" role="radio" title="Nondeterministic finite automaton — δ: Q × Σ → 𝒫(Q)">NFA</button>
   </div>
   <button type="button" class="pill ex-chip" id="ex-chip" hidden title="Leave the exercise and go back to your own automaton">Exercise <span aria-hidden="true">·</span> Leave ×</button>
+  <button type="button" class="pill ex-chip" id="prod-chip" hidden title="Leave the simulation: back to your automaton, choose M₁ and M₂ again">Simulation <span aria-hidden="true">·</span> Leave ×</button>
   <div class="acts">
     <button type="button" class="btn" id="btn-examples" aria-haspopup="menu">Examples
       <svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
@@ -92,12 +93,12 @@
 
 <!-- raise every ?v= number at each release, so browsers never mix old and new files -->
 <!-- all files sit next to index.html (no subfolders), so uploading to GitHub is just "select all files" -->
-<script src="stage.js?v=5"></script>
-<script src="core.js?v=5"></script>
-<script src="graph.js?v=5"></script>
-<script src="guide.js?v=5"></script>
-<script src="live-config.js?v=5"></script>
-<script src="live.js?v=5"></script>
-<script src="app.js?v=5"></script>
+<script src="stage.js?v=8"></script>
+<script src="core.js?v=8"></script>
+<script src="graph.js?v=8"></script>
+<script src="guide.js?v=8"></script>
+<script src="live-config.js?v=8"></script>
+<script src="live.js?v=8"></script>
+<script src="app.js?v=8"></script>
 </body>
 </html>

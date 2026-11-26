@@ -16,6 +16,7 @@
   'use strict';
   const NS = 'http://www.w3.org/2000/svg';
   const R = 24;                 // state radius
+  const SYM_COLORS = 5;          // view.symbolColors: arrows coloured by their symbol (--sym0 … --sym4 in style.css)
   const PALETTE = ['#4E79A7', '#F28E2B', '#59A14F', '#E15759', '#76B7B2', '#EDC948', '#B07AA1', '#FF9DA7', '#9C755F', '#8CD17D', '#BAB0AC', '#D37295'];
   const INSET = { top: 56, bottom: 78, left: 24, right: 64 };   // screen px kept free for overlays
   const MAX_K = 1.25, MIN_K = 0.25;
@@ -151,6 +152,10 @@
         const m = el('marker', { id, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 9, markerHeight: 9, markerUnits: 'userSpaceOnUse', orient: 'auto-start-reverse' }, d);
         el('path', { d: 'M0,0.5 L10,5 L0,9.5 z', class: cls }, m);
       }
+      if (view.symbolColors) for (let k = 0; k < SYM_COLORS; k++) {
+        const m = el('marker', { id: 'arrow-s' + k, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 9, markerHeight: 9, markerUnits: 'userSpaceOnUse', orient: 'auto-start-reverse' }, d);
+        el('path', { d: 'M0,0.5 L10,5 L0,9.5 z', style: `fill:var(--sym${k})` }, m);
+      }
     }
 
     /** True if the quadratic curve S–C–E passes through a state other than its endpoints. */
@@ -181,12 +186,13 @@
         const other = e.from === q ? e.to : e.to === q ? e.from : null;
         if (other && A.pos[other]) used.push(Math.atan2(A.pos[other].y - P.y, A.pos[other].x - P.x));
       }
-      if (A.initial === q) used.push(Math.PI);
+      if (view.initials ? view.initials.includes(q) : A.initial === q) used.push(Math.PI);
       return used;
     }
 
     /** Automatic loop direction: above, unless another side is clearly freer. */
     function autoLoopAngle(q, all) {
+      if (view.loopDir && view.loopDir[q] !== undefined) return view.loopDir[q];   // fixed by the app (e.g. right of a vertical automaton)
       const used = usedAngles(q, all);
       const cands = [-90, 90, 0, 180, -45, -135, 45, 135].map(d => d * Math.PI / 180);
       if (!used.length) return cands[0];
@@ -356,6 +362,8 @@
       const content = el('g', { class: 'content' }, svg);
       const edgeLayer = el('g', { class: 'edges' }, content);
       const stateLayer = el('g', { class: 'states' }, content);
+      for (const l of view.guides || []) el('line', Object.assign({ class: 'guide-line' }, l), edgeLayer);
+      const symColor = a => `var(--sym${A.alphabet.indexOf(a) % SYM_COLORS})`;
       const activeEdges = view.activeEdges || new Set();
       const sel = view.selected;
       const all = root.Automata.edges(A);
@@ -373,19 +381,26 @@
         const isActive = activeEdges.has(key);
         const isBending = drag && drag.kind === 'bend' && drag.moved && drag.from === e.from && drag.to === e.to;
         const g = el('g', { class: 'edge' + (isSel ? ' sel' : '') + (isActive ? ' active' : '') + (e.pending ? ' pending' : '') + (isBending ? ' bending' : ''), 'data-from': e.from, 'data-to': e.to }, edgeLayer);
-        const marker = `url(#${isSel || isBending ? 'arrow-sel' : isActive ? 'arrow-active' : 'arrow'})`;
+        const one = view.symbolColors && e.symbols.length === 1 ? A.alphabet.indexOf(e.symbols[0]) % SYM_COLORS : -1;
+        const marker = `url(#${isSel || isBending ? 'arrow-sel' : one >= 0 ? 'arrow-s' + one : isActive ? 'arrow-active' : 'arrow'})`;
         el('path', { d: G.d, class: 'edge-hit' }, g);
-        el('path', { d: G.d, class: 'edge-line', 'marker-end': marker }, g);
+        const line = el('path', { d: G.d, class: 'edge-line', 'marker-end': marker }, g);
+        if (one >= 0) line.style.stroke = `var(--sym${one})`;
         const t = el('text', { x: G.lp.x, y: G.lp.y, class: 'edge-label', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, g);
-        t.textContent = text;
+        if (view.symbolColors && !e.pending) e.symbols.forEach((a, i) => {
+          if (i) t.appendChild(document.createTextNode(', '));
+          el('tspan', { style: `fill:${symColor(a)}` }, t).textContent = a;
+        });
+        else t.textContent = text;
         // grab handle in the middle of the arrow: shown on hover and when selected (drag = bend / turn the loop)
         if (view.mode === 'select' && (isSel || isBending || hoverEdge === key)) {
           el('circle', { cx: G.apex.x, cy: G.apex.y, r: 6, class: 'bend-handle' }, g);
         }
       }
 
-      if (A.initial && A.pos[A.initial]) {
-        const p = A.pos[A.initial];
+      for (const q0 of view.initials || (A.initial ? [A.initial] : [])) {
+        const p = A.pos[q0];
+        if (!p) continue;
         el('path', { d: `M${p.x - R - 42},${p.y} L${p.x - R - 1},${p.y}`, class: 'edge-line initial', 'marker-end': 'url(#arrow)' }, edgeLayer);
       }
 
@@ -401,6 +416,7 @@
         if (active.has(q)) cls.push('active');
         if (view.hoverState === q) cls.push('hover');
         if (view.hoverState && view.hoverState !== q) cls.push('faded');
+        if (view.ghost && view.ghost.has(q)) cls.push('ghost-state');
         const g = el('g', { class: cls.join(' '), 'data-state': q, transform: `translate(${p.x},${p.y})` }, stateLayer);
         const c = el('circle', { r: R, class: 'state-circle' }, g);
         if (colors && colors[q]) { c.style.fill = colors[q] + '33'; c.style.stroke = colors[q]; }
@@ -408,7 +424,7 @@
           const c2 = el('circle', { r: R - 5, class: 'state-inner' }, g);
           if (colors && colors[q]) c2.style.stroke = colors[q];
         }
-        nameText(g, q);
+        nameText(g, (view.labels && view.labels[q]) || q);
       }
 
       // "new arrow" handle of the hovered (or selected) state

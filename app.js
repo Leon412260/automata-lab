@@ -248,6 +248,7 @@
     $('.ptabs [data-tab=product]').hidden = !!ui.exercise;   // it would give away the answer of a product exercise
     const pv = prodView();
     $('.tools').hidden = pv;
+    $('#prod-chip').hidden = !pv;
     if (pv) { ui.selected = null; if (ui.pop && ui.pop.type !== 'menu') ui.pop = null; }
     $$('.ptabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === ui.tab)));
     $('#btn-new').hidden = $('#btn-share').hidden = !!ui.exercise;
@@ -276,7 +277,7 @@
     if (prodView()) {
       const m = prodModel();
       if (ui.fitNext) ui.fitNext = false;
-      graph.render(m.P, { mode: 'view', active: m.active, activeEdges: m.activeEdges, fit: m.fit });
+      graph.render(m.grid.A, Object.assign({ mode: 'view', fit: m.fit }, m.grid.view));
       m.fit = false;
       renderZoom();
       return;
@@ -837,18 +838,55 @@
   }
 
   /**
-   * Two automata as a cross: the second from left to right on top, the first from top to bottom on the left,
-   * so that the pair (q, p) of their product sits in the row of q and the column of p.
-   * v1 / v2: optional highlighted states and arrows; extra1 / extra2: buttons next to the labels.
+   * Like in the exercise solutions: M₂ from left to right on top, M₁ from top to bottom on the left, and between
+   * them the pairs (q, p) of the product in the row of q and the column of p. Arrows are coloured by their symbol.
+   * prod: the part of the product built so far (missing pairs are drawn dashed); without it only the grid is shown.
    */
-  function crossHTML(one, two, main, corner) {
-    const box = (x, dir) => {
-      minis.set(x.id, { A: x.A, dir, view: x.view });
-      const h = dir === 'vertical' ? ` style="height:${Math.max(150, x.A.states.length * 82 + 40)}px"` : '';
-      return `<div class="lab"><span class="m">${x.label}</span>${x.extra || ''}</div><div class="mini" data-mini="${x.id}"${h}></div>`;
+  function pairNamer(M1, M2) {
+    const sub = q => { const [b, s] = Graph.nameParts(q); return s || b; };
+    const o1 = M.lineOrder(M1), o2 = M.lineOrder(M2);
+    const all = [];
+    o1.forEach(q => o2.forEach(p => all.push([q, p])));
+    let name = (q, p) => `r_${sub(q)},${sub(p)}`;      // q_λ and p_0 give r_λ,0, as in the exercise sheets
+    const ns = all.map(([q, p]) => name(q, p));
+    if (new Set(ns).size < ns.length || ns.some(n => /\s/.test(n))) name = (q, p) => `r_${o1.indexOf(q)},${o2.indexOf(p)}`;
+    return { name, o1, o2, all };
+  }
+
+  /** One automaton on a line, with the colours of the grid view (loops on the right of a vertical one). */
+  function lineView(B, dir) {
+    const V = M.lineLayout(Object.assign({}, B, { pos: B.pos || {} }), dir), loopDir = {};
+    if (dir === 'vertical') V.states.forEach(q => { loopDir[q] = 0; });
+    return { A: V, view: { loopDir, symbolColors: true } };
+  }
+
+  function gridView(M1, M2, prod, hl) {
+    const { name, o1, o2, all } = pairNamer(M1, M2);
+    const DX = 130, DY = 115, X0 = 320, Y0 = 280;
+    const V = { type: 'FA', states: [], alphabet: M1.alphabet.slice(), initial: null, accepting: [], delta: {}, pos: {}, arcs: {} };
+    const labels = {}, ghost = new Set(), initials = [], loopDir = {};
+    const add = (id, label, x, y, acc, d) => {
+      V.states.push(id); labels[id] = label; V.pos[id] = { x, y };
+      if (acc) V.accepting.push(id);
+      V.delta[id] = d || Object.fromEntries(V.alphabet.map(a => [a, []]));
     };
-    return `<div class="cross"><div class="x-corner">${corner || ''}</div><div class="x-top">${box(two, 'horizontal')}</div>
-      <div class="x-left">${box(one, 'vertical')}</div><div class="x-main">${main || ''}</div></div>`;
+    const copy = (B, pre, q) => Object.fromEntries(V.alphabet.map(a => [a, M.targets(B, q, a).map(r => pre + r)]));
+    o2.forEach((p, j) => add('2:' + p, p, X0 + j * DX, Y0 - 1.3 * DY, M2.accepting.includes(p), copy(M2, '2:', p)));
+    o1.forEach(q => { loopDir['1:' + q] = 0; });   // loops of the vertical automaton on its right, as in the solutions
+    o1.forEach((q, i) => add('1:' + q, q, X0 - 1.55 * DX, Y0 + i * DY, M1.accepting.includes(q), copy(M1, '1:', q)));
+    initials.push('2:' + M2.initial, '1:' + M1.initial);
+    for (const [q, p] of all) {
+      const n = name(q, p), on = !!prod && prod.states.includes(n);
+      add(n, n, X0 + o2.indexOf(p) * DX, Y0 + o1.indexOf(q) * DY, on && prod.accepting.includes(n), on ? prod.delta[n] : null);
+      if (!on) ghost.add(n);
+    }
+    if (prod) initials.push(prod.initial);
+    const xs = X0 - 0.78 * DX, ys = Y0 - 0.68 * DY;
+    const guides = [
+      { x1: X0 - 2.2 * DX, y1: ys, x2: X0 + (o2.length - 0.4) * DX, y2: ys },
+      { x1: xs, y1: Y0 - 1.95 * DY, x2: xs, y2: Y0 + (o1.length - 0.45) * DY },
+    ];
+    return { A: V, view: Object.assign({ labels, ghost, initials, guides, loopDir, symbolColors: true }, hl || {}) };
   }
 
   /** Draws the read-only diagrams of the given automata after the panel was rendered. */
@@ -862,7 +900,7 @@
       const g = Graph.createGraph(s, { onSelect() {}, onBackground() {}, onMove() {}, onAddState() {}, onToggleAccepting() {}, onConnect() {} },
         { inset: { top: 8, bottom: 8, left: 8, right: 8 } });
       const B = m.A.pos ? m.A : Object.assign({}, m.A, { pos: {} });   // automata stored without positions are laid out here
-      g.render(m.dir ? M.lineLayout(B, m.dir) : M.autoLayout(B),Object.assign({ mode: 'view', fit: true }, m.view || {}));
+      g.render(m.grid ? m.A : m.dir ? M.lineLayout(B, m.dir) : M.autoLayout(B), Object.assign({ mode: 'view', fit: true }, m.view || {}));
     });
   }
 
@@ -885,11 +923,8 @@
     const key = JSON.stringify([S.M1, S.M2, S.op, S.step]);
     if (prodCache.key === key) return prodCache.model;
     const { pairs, steps } = M.productSteps(S.M1, S.M2);
-    // names like in the exercise sheets: q_λ and p_0 give r_λ,0 (r0, r1, … if that does not work)
-    const sub = q => { const [b, s] = Graph.nameParts(q); return s || b; };
-    let names = pairs.map(([q, p]) => `r_${sub(q)},${sub(p)}`);
-    if (new Set(names).size < names.length || names.some(n => /\s/.test(n))) names = pairs.map((_, i) => 'r' + i);
-    const o1 = M.lineOrder(S.M1), o2 = M.lineOrder(S.M2);
+    const namer = pairNamer(S.M1, S.M2);
+    const names = pairs.map(([q, p]) => namer.name(q, p));
     const step = Math.max(0, Math.min(S.step, steps.length));
     const found = new Set([0]);
     steps.slice(0, step).forEach(t => found.add(t.to));
@@ -899,17 +934,17 @@
       if (!found.has(i)) return;
       P.states.push(names[i]);
       P.delta[names[i]] = Object.fromEntries(P.alphabet.map(a => [a, []]));
-      P.pos[names[i]] = { x: 100 + o2.indexOf(p) * 150, y: 100 + o1.indexOf(q) * 130 };   // row of q, column of p
       if (done && M.OPS[S.op].f(S.M1.accepting.includes(q), S.M2.accepting.includes(p))) P.accepting.push(names[i]);
     });
     steps.slice(0, step).forEach(t => { P.delta[names[t.from]][t.a] = [names[t.to]]; });
     const cur = step > 0 ? steps[step - 1] : null;
     const at = cur ? pairs[cur.from] : pairs[0], to = cur ? pairs[cur.to] : null;
-    const model = { pairs, steps, names, step, done, P, cur,
-      active: new Set([names[cur ? cur.to : 0]]),
-      activeEdges: cur ? new Set([names[cur.from] + '\u0000' + names[cur.to]]) : new Set(),
-      view1: { active: new Set([to ? to[0] : at[0]]), activeEdges: cur ? new Set([at[0] + '\u0000' + to[0]]) : new Set() },
-      view2: { active: new Set([to ? to[1] : at[1]]), activeEdges: cur ? new Set([at[1] + '\u0000' + to[1]]) : new Set() } };
+    const now = to || at;
+    const grid = gridView(S.M1, S.M2, P, {
+      active: new Set([names[cur ? cur.to : 0], '1:' + now[0], '2:' + now[1]]),
+      activeEdges: cur ? new Set([names[cur.from] + '\u0000' + names[cur.to], '1:' + at[0] + '\u0000' + '1:' + to[0], '2:' + at[1] + '\u0000' + '2:' + to[1]]) : new Set(),
+    });
+    const model = { pairs, steps, names, step, done, P, cur, grid };
     model.fit = prodCache.fit; prodCache.fit = false;
     prodCache.key = key; prodCache.model = model;
     return model;
@@ -918,7 +953,7 @@
   function productHTML() {
     const S = ui.prod, m = prodModel();
     const slot = (k, label) => S[k]
-      ? { id: 'p' + k, A: S[k], label, extra: `<button type="button" class="btn sm text" data-pclear="${k}" title="Choose another automaton">Change</button>`, view: m[k === 'M1' ? 'view1' : 'view2'] }
+      ? { id: 'p' + k, A: S[k], label, extra: `<button type="button" class="btn sm text" data-pclear="${k}" title="Choose another automaton">Change</button>` }
       : null;
     const s1 = slot('M1', 'M<sub>1</sub>'), s2 = slot('M2', 'M<sub>2</sub>');
     let h = `<div class="card"><div class="lab"><span>Simulation of two FAs</span>
@@ -932,7 +967,7 @@
       h += `<div><button type="button" class="btn sm text" data-action="pexample">Try an example</button></div></div>`;
       return h;
     }
-    if (m.error) return h + `<div class="code-err">${esc(m.error)}</div>` + crossHTML(s1, s2) + `</div>`;
+    if (m.error) return h + `<div class="code-err">${esc(m.error)}</div><div class="row-btns">${s1.extra.replace('Change', 'Change M₁')}${s2.extra.replace('Change', 'Change M₂')}</div></div>`;
     const atEnd = m.step >= m.steps.length;
     h += `<div class="sim-ctrl">
         <button type="button" class="btn sq" data-pstep="reset" title="Back to the start" aria-label="Back to the start" ${m.step === 0 ? 'disabled' : ''}><svg class="ic" viewBox="0 0 24 24"><path d="M6 5v14M18 6l-8 6 8 6z"/></svg></button>
@@ -951,6 +986,7 @@
         <div class="txt">${c.isNew ? `A new pair: it becomes the state ${N(c.to)}.` : `${N(c.to)} is already there.`}</div>`;
     }
     h += `<div class="explain">${ex}</div>`;
+    const change = `<div class="row-btns">${s1.extra.replace('Change', 'Change M₁')}${s2.extra.replace('Change', 'Change M₂')}</div>`;
     if (atEnd) {
       const F = m.P.accepting, rule = OP_RULE[S.op], neg = S.op === 'difference' ? '∉' : '∈';
       const all = S.M1.states.length * S.M2.states.length, left = all - m.pairs.length;
@@ -959,8 +995,8 @@
         <div class="txt">${left ? `${left} of the |<i>Q</i><sub>1</sub>| · |<i>Q</i><sub>2</sub>| = ${all} pairs cannot be reached from ${pr(0)} and are left out.` : `All |<i>Q</i><sub>1</sub>| · |<i>Q</i><sub>2</sub>| = ${all} pairs are reachable.`}</div></div>
         <div><button type="button" class="btn sm" data-action="puse-result">Use as my automaton</button></div>`;
     }
-    h += `</div>`;
-    // M₁ top to bottom, M₂ left to right, δ of the product in between
+    h += change + `</div>`;
+    // δ of the product, filled step by step
     let t = `<table class="delta prod"><thead><tr><th></th>${m.P.alphabet.map(a => `<th>${esc(a)}</th>`).join('')}</tr></thead><tbody>`;
     const filled = new Map();
     m.steps.slice(0, m.step).forEach(s => filled.set(s.from + '\u0001' + s.a, s.to));
@@ -974,8 +1010,8 @@
       t += `</tr>`;
     });
     t += `</tbody></table>`;
-    return h + `<div class="card">${crossHTML(s1, s2, t, 'M<sub>1</sub> × M<sub>2</sub>')}
-      <div class="legend">M₁ from top to bottom, M₂ from left to right: the pair (<i>q</i>, <i>p</i>) sits in the row of <i>q</i> and the column of <i>p</i>, here and on the canvas.</div></div>`;
+    return h + `<div class="card"><div class="lab"><span class="m">δ of M</span></div>${t}
+      <div class="legend">On the canvas M₂ is on top and M₁ on the left: each row belongs to a state of M₁, each column to a state of M₂. Dashed: pairs that are not states (yet).</div></div>`;
   }
 
   function prodAction(t) {
@@ -1168,8 +1204,15 @@
       <p class="ex-text">${esc(ex.text)}</p>
       ${pills.length ? `<div class="row-pills">${pills.map(p => `<span class="pill">${esc(p)}</span>`).join('')}</div>` : ''}
     </div>`;
-    if (ex.kind === 'product') h += `<div class="card">${crossHTML({ id: 'A1', A: ex.A1, label: 'A<sub>1</sub>' }, { id: 'A2', A: ex.A2, label: 'A<sub>2</sub>' },
-      `<div class="muted small">The product has one state for each pair (<i>q</i>, <i>p</i>). Drawn in the row of <i>q</i> and the column of <i>p</i>, it looks like the grid of A<sub>1</sub> × A<sub>2</sub>.</div>`, 'A<sub>1</sub> × A<sub>2</sub>')}</div>`;
+    if (ex.kind === 'product') {
+      // like in the solutions: A₂ from left to right (the columns of the product), A₁ from top to bottom (its rows)
+      const box = (id, B, label, dir, note) => {
+        minis.set(id, Object.assign({ grid: true }, lineView(B, dir)));
+        const h = dir === 'vertical' ? Math.min(460, B.states.length * 105 + 50) : 170;
+        return `<div class="card"><div class="lab"><span class="m">${label}</span><span class="pill">${note}</span></div><div class="mini" data-mini="${id}" style="height:${h}px"></div></div>`;
+      };
+      h += box('A2', ex.A2, 'A<sub>2</sub>', 'horizontal', 'left to right') + box('A1', ex.A1, 'A<sub>1</sub>', 'vertical', 'top to bottom');
+    }
     if (ex.kind === 'powerset') h += `<div class="card">${miniHTML('N', ex.nfa, 'N')}</div>`;
     h += `<div class="card"><div class="muted small">Build your answer on the canvas, then check it.</div>
       <button type="button" class="btn dark wide" data-action="check">Check my automaton</button>`;
@@ -1631,6 +1674,8 @@
     toast('New automaton — Undo restores the previous one.');
   });
   $('#ex-chip').addEventListener('click', leaveExercise);
+  // leave the simulation: back to your own automaton on the canvas, with M₁ and M₂ to be chosen again
+  $('#prod-chip').addEventListener('click', () => { Object.assign(ui.prod, { M1: null, M2: null, step: 0 }); saveProd(); ui.fitNext = true; prodCache.fit = true; renderAll(); });
   $('#btn-undo').addEventListener('click', undo);
   $('#btn-redo').addEventListener('click', redo);
   $('#btn-guide').addEventListener('click', () => Guide.open());
